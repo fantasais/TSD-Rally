@@ -1,0 +1,120 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f6f6f2;
+  background: #080808;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --bg: #080808;
+  --panel: #111111;
+  --panel-2: #181818;
+  --line: #2a2a2a;
+  --muted: #919191;
+  --text: #f6f6f2;
+  --green: #9be23e;
+  --amber: #ffba3b;
+  --red: #ff5c4d;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { margin: 0; min-height: 100%; background: var(--bg); }
+body { min-width: 320px; }
+button, input { font: inherit; }
+button { touch-action: manipulation; }
+
+.app-shell { min-height: 100vh; max-width: 680px; margin: 0 auto; padding-bottom: calc(22px + env(safe-area-inset-bottom)); background: var(--bg); }
+.topbar { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: calc(14px + env(safe-area-inset-top)) 16px 12px; background: rgba(8,8,8,.96); border-bottom: 1px solid var(--line); }
+.eyebrow { color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .14em; }
+.brand { margin-top: 3px; font-weight: 900; font-size: 18px; }
+.gps-pill { flex: none; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; font-weight: 900; letter-spacing: .04em; }
+.gps-pill.good { color: var(--green); }
+.gps-pill.fair { color: var(--amber); }
+.gps-pill.poor { color: var(--red); }
+
+.nav-tabs { position: sticky; top: 68px; z-index: 19; display: grid; grid-template-columns: repeat(3,1fr); background: var(--bg); border-bottom: 1px solid var(--line); }
+.nav-tabs button { min-height: 50px; border: 0; background: transparent; color: var(--muted); font-weight: 900; letter-spacing: .08em; }
+.nav-tabs button.active { color: var(--text); box-shadow: inset 0 -3px 0 var(--green); }
+
+.content { padding: 14px; display: grid; gap: 12px; }
+.panel, .empty-card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; }
+.panel h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .09em; }
+.section-head { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+label { display: grid; gap: 7px; margin-top: 12px; color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: .04em; }
+input { width: 100%; min-height: 48px; border: 1px solid #3a3a3a; border-radius: 5px; background: #050505; color: var(--text); padding: 10px 11px; font-size: 16px; font-weight: 800; }
+input:focus { outline: 2px solid var(--green); outline-offset: 1px; }
+.two-col { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+
+.sector-head, .sector-row { display:grid; grid-template-columns: 1fr 1fr .8fr 42px; gap:7px; align-items:center; }
+.sector-head { color:var(--muted); font-size:10px; font-weight:900; letter-spacing:.08em; padding: 0 2px 5px; }
+.sector-row { margin-bottom:7px; }
+.sector-row input { min-height:44px; padding:8px; }
+.delete-button { height:44px; border:1px solid #3a3a3a; background:#090909; color:var(--red); border-radius:5px; font-size:26px; }
+
+button { cursor:pointer; }
+.primary-button, .secondary-button, .ghost-button, .stop-button, .small-button { min-height: 48px; border-radius: 6px; padding: 10px 14px; font-weight: 950; letter-spacing: .035em; }
+.primary-button { border: 1px solid var(--green); background: var(--green); color: #091000; }
+.secondary-button { border: 1px solid #555; background: #1b1b1b; color: var(--text); }
+.ghost-button { border: 1px solid #333; background: transparent; color: #b7b7b7; }
+.stop-button { border: 1px solid var(--red); background: var(--red); color: #170000; }
+.small-button { min-height:36px; padding:7px 10px; border:1px solid #444; background:#191919; color:var(--text); font-size:11px; }
+.button-row, .launch-row, .rally-actions { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:8px; margin-top:12px; }
+.launch-row { margin: 0; }
+
+.error-box { margin-top:10px; border-left:4px solid var(--red); background:#22100f; color:#ffd8d4; padding:10px; font-size:12px; line-height:1.5; }
+.status-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.status-grid div { background:#080808; border:1px solid var(--line); padding:10px; }
+.status-grid span, .target-card span, .trip-card span, .next-card > span, .timing-strip span { display:block; color:var(--muted); font-size:10px; font-weight:900; letter-spacing:.09em; }
+.status-grid strong { display:block; margin-top:5px; font-size:18px; }
+
+.rally-screen { gap:10px; }
+.delta-card { display:grid; place-items:center; min-height: 196px; border-radius:8px; border:3px solid #333; background:#0c0c0c; text-align:center; }
+.delta-card.late { border-color:var(--red); }
+.delta-card.early { border-color:var(--amber); }
+.delta-card.on-time { border-color:var(--green); }
+.delta-number { font-size: clamp(76px, 24vw, 132px); line-height:.86; font-weight:1000; letter-spacing:-.07em; font-variant-numeric: tabular-nums; }
+.delta-label { margin-top:14px; font-size:14px; font-weight:950; letter-spacing:.12em; }
+.delta-card.late .delta-label { color:var(--red); }
+.delta-card.early .delta-label { color:var(--amber); }
+.delta-card.on-time .delta-label { color:var(--green); }
+
+.target-card { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.target-card > div, .trip-card, .next-card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; }
+.target-card strong { display:inline-block; margin-top:4px; font-size:42px; font-weight:1000; letter-spacing:-.04em; }
+.target-card small, .trip-card small { margin-left:6px; color:var(--muted); font-weight:800; }
+.trip-card { text-align:center; }
+.trip-card strong { display:inline-block; margin-top:4px; font-size:52px; font-weight:1000; letter-spacing:-.035em; font-variant-numeric:tabular-nums; }
+.next-main { display:flex; justify-content:space-between; align-items:baseline; gap:12px; margin-top:5px; }
+.next-main strong { font-size:26px; }
+.next-main b { color:var(--green); font-size:23px; }
+
+.odo-controls { display:grid; grid-template-columns:1fr 1.3fr 1fr; gap:8px; }
+.odo-controls button { min-height:62px; border:1px solid #555; border-radius:6px; background:#191919; color:var(--text); font-weight:1000; font-size:17px; }
+.odo-controls .set-odo { border-color:var(--green); color:var(--green); }
+.timing-strip { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.timing-strip > div { background:#0e0e0e; border:1px solid var(--line); padding:10px; }
+.timing-strip strong { display:block; margin-top:4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:17px; }
+
+.armed-card { min-height: 430px; border:2px solid var(--green); border-radius:8px; display:grid; place-items:center; align-content:center; text-align:center; gap:6px; background:#0c0f08; }
+.countdown { font-size:clamp(88px,30vw,150px); line-height:.9; font-weight:1000; letter-spacing:-.06em; font-variant-numeric:tabular-nums; }
+.countdown-label { color:var(--green); font-size:14px; font-weight:950; letter-spacing:.14em; }
+.clock-line { margin-top:18px; font-size:22px; font-weight:900; }
+.rally-flags { display:flex; gap:14px; margin-top:14px; color:var(--muted); font-size:11px; font-weight:900; }
+
+.rally-empty { min-height:65vh; align-content:center; }
+.empty-card { text-align:center; display:grid; gap:12px; }
+.empty-card h1 { margin:4px 0 8px; font-size:26px; line-height:1.1; }
+
+.sim-controls { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.sim-controls button { min-height:54px; border:1px solid #444; background:#171717; color:var(--text); border-radius:6px; font-weight:900; }
+.speed-slider { background:var(--panel); border:1px solid var(--line); padding:12px; border-radius:8px; margin-top:0; }
+.speed-slider input { padding:0; min-height:36px; accent-color:var(--green); }
+
+.footer-note { padding: 6px 14px 0; color:#6f6f6f; font-size:10px; line-height:1.4; text-align:center; }
+
+@media (max-width: 420px) {
+  .topbar { padding-left:12px; padding-right:12px; }
+  .content { padding:10px; }
+  .target-card strong { font-size:35px; }
+  .trip-card strong { font-size:45px; }
+  .next-main strong { font-size:22px; }
+  .next-main b { font-size:20px; }
+}

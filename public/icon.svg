@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="76" fill="#080808"/>
+  <rect x="54" y="54" width="404" height="404" rx="44" fill="none" stroke="#9be23e" stroke-width="22"/>
+  <text x="256" y="245" fill="#f6f6f2" font-family="Arial, Helvetica, sans-serif" font-size="124" font-weight="900" text-anchor="middle">TSD</text>
+  <text x="256" y="328" fill="#9be23e" font-family="Arial, Helvetica, sans-serif" font-size="52" font-weight="900" text-anchor="middle">RALLY</text>
+</svg>
