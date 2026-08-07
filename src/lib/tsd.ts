@@ -6,6 +6,15 @@ export function sortSectors(sectors: SpeedSector[]): SpeedSector[] {
   return [...sectors].sort((a, b) => a.fromKm - b.fromKm)
 }
 
+export function chainSectors(sectors: SpeedSector[]): SpeedSector[] {
+  let fromKm = 0
+  return sectors.map((sector) => {
+    const chained = { ...sector, fromKm }
+    fromKm = sector.toKm
+    return chained
+  })
+}
+
 export function validateSectors(sectors: SpeedSector[]): string[] {
   const errors: string[] = []
   const sorted = sortSectors(sectors)
@@ -20,6 +29,9 @@ export function validateSectors(sectors: SpeedSector[]): string[] {
     if (sector.fromKm < 0) errors.push(`Sector ${index + 1}: start distance cannot be negative.`)
     if (sector.toKm <= sector.fromKm) errors.push(`Sector ${index + 1}: end distance must be greater than start distance.`)
     if (sector.speedKph <= 0) errors.push(`Sector ${index + 1}: average speed must be greater than zero.`)
+    if (!Number.isFinite(sector.scratchSeconds) || sector.scratchSeconds < 0) {
+      errors.push(`Sector ${index + 1}: scratch time cannot be negative.`)
+    }
 
     if (index > 0) {
       const previous = sorted[index - 1]
@@ -30,7 +42,7 @@ export function validateSectors(sectors: SpeedSector[]): string[] {
   })
 
   if (sorted[0] && Math.abs(sorted[0].fromKm) > 0.001) {
-    errors.push('First sector should start at 0.000 km for V0.1.')
+    errors.push('First sector should start at 0.000 km.')
   }
 
   return errors
@@ -48,9 +60,18 @@ export function idealElapsedSecondsAtDistance(distanceKm: number, sectors: Speed
 
   for (const sector of sorted) {
     if (distance <= sector.fromKm + EPSILON) break
+
     const segmentEnd = Math.min(distance, sector.toKm)
     const segmentKm = Math.max(0, segmentEnd - sector.fromKm)
     seconds += (segmentKm / sector.speedKph) * 3600
+
+    // A TC scratch is treated as free time added at the TC distance.
+    // Crossing the TC therefore makes the car appear early by the available
+    // scratch amount, and the delta naturally counts back toward zero while waiting.
+    if (sector.tcAtEnd && distance >= sector.toKm - EPSILON) {
+      seconds += sector.scratchSeconds
+    }
+
     if (distance <= sector.toKm + EPSILON) break
   }
 
