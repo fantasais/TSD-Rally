@@ -1,61 +1,47 @@
-# TSD Rally V0.1
+# TSD Rally Computer V0.3
 
-A deliberately simple, offline-first TSD rally computer for a navigator using a physical roadbook plus organiser-supplied speed chart.
+A deliberately simple GPS-assisted TSD/regularity rally computer built as a React + TypeScript PWA.
 
-## V0.1 scope
+## V0.3 rally logic
 
-- Speed-chart entry by distance sector
-- Official start date/time and automatic armed start
-- Live high-accuracy browser GPS watch
-- Cumulative GPS odometer with basic noise/jump rejection
-- Calibration factor from official vs measured calibration distance
-- Manual `-10 m`, `+10 m`, and `SET ODO` correction
-- Live ideal-vs-actual timing deviation in seconds
-- Automatic target-speed changes by rally odometer distance
-- Next speed-change distance
-- Offline PWA cache
-- Screen Wake Lock request while armed/running
-- Local persistence of settings/session/GPS raw trip
-- Simulation mode for desk testing
+- GPS starts automatically when the app opens (browser permission is still required).
+- The setup uses a plain FROM / TO / AVG speed chart.
+- TC locations are **not** pre-programmed. They can appear anywhere on the route.
+- Setup has one optional TC scratch-time value (minutes + seconds).
+- During a run, pressing **TC** creates a fresh timing anchor at the current odometer and actual time.
+- Any accumulated early/late deviation before that TC is scratched/reset.
+- If scratch time is configured, the new ideal clock is shifted forward by that amount. Immediately after pressing TC the display therefore shows the configured amount EARLY and counts back toward zero while stationary.
+- With zero scratch time, pressing TC resets the deviation to approximately 0.0 seconds immediately.
+- Speed changes continue to follow their absolute roadbook distances after a TC.
 
-## Critical operating principle
+## Core features
 
-The organiser's roadbook distance is the master reference. GPS is only the measuring instrument. Calibrate before the rally and correct the app odometer whenever a trustworthy roadbook distance reference is available.
+- Official start time / arm start
+- Start-now testing mode
+- Live GPS odometer
+- Calibration factor
+- Manual −10 m / SET ODO / +10 m correction
+- Live early/late timing delta
+- Automatic speed changes by roadbook distance
+- TC reset + scratch handling
+- Offline-capable PWA
+- Screen wake lock request while armed/running
+- Local persistence
 
-## Local development
+## Development
 
 ```bash
 npm install
 npm run test
+npm run build
 npm run dev
 ```
 
-## Production build
+## Deployment
 
-```bash
-npm run build
-```
+Vercel settings:
+- Framework preset: Vite
+- Build command: `npm run build`
+- Output directory: `dist`
 
-## Vercel
-
-1. Push this folder to a GitHub repository.
-2. Import the repository into Vercel.
-3. Framework preset: Vite. No `vercel.json` is required for V0.1 because the app uses a single page without client-side URL routes.
-4. Build command: `npm run build`.
-5. Output directory: `dist`.
-6. Deploy.
-7. Open the HTTPS URL on the rally phone and allow precise location.
-8. Add/install the PWA to the home screen.
-
-## Before using it in an event
-
-- Confirm electronic/GPS rally computers are permitted by your event/class regulations.
-- Keep the app in the foreground during competitive sections.
-- Disable battery optimisation for the browser/PWA if Android allows it.
-- Test GPS permission, wake lock and offline reload on the actual phone.
-- Run a calibration route and a mock TSD route before rally day.
-- Carry the organiser's roadbook and a backup timing method. V0.1 is new software, not a homologated rally computer.
-
-## GPS filter currently used
-
-The first build rejects fixes with >50 m reported accuracy, impossible jumps above 180 km/h, tiny movements below an accuracy-aware noise gate, and small position movements when the device reports near-zero speed. This must be tuned from real road-test data rather than theory.
+Core rally operation is designed not to depend on a network connection once the PWA is cached.

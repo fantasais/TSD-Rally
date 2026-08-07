@@ -6,9 +6,9 @@ export type SpeedSector = {
 }
 
 export type RallySettings = {
-  rallyName: string
   startDateTime: string
   calibrationFactor: number
+  scratchSeconds: number
   sectors: SpeedSector[]
 }
 
@@ -20,6 +20,9 @@ export type RallySession = {
   stopMs: number | null
   rawBaselineKm: number
   manualOffsetKm: number
+  timingAnchorDistanceKm: number
+  timingAnchorIdealElapsedSeconds: number
+  tcCount: number
 }
 
 export type GpsPoint = {

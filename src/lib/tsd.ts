@@ -30,7 +30,7 @@ export function validateSectors(sectors: SpeedSector[]): string[] {
   })
 
   if (sorted[0] && Math.abs(sorted[0].fromKm) > 0.001) {
-    errors.push('First sector should start at 0.000 km for V0.1.')
+    errors.push('First sector should start at 0.000 km.')
   }
 
   return errors
@@ -41,6 +41,11 @@ export function totalRouteKm(sectors: SpeedSector[]): number {
   return sorted.length ? sorted[sorted.length - 1].toKm : 0
 }
 
+/**
+ * Base ideal elapsed time from rally distance 0 to the supplied distance.
+ * This is deliberately independent of TCs. A TC creates a fresh timing anchor
+ * in App.tsx, while the speed chart remains tied to absolute roadbook distance.
+ */
 export function idealElapsedSecondsAtDistance(distanceKm: number, sectors: SpeedSector[]): number {
   const sorted = sortSectors(sectors)
   const distance = Math.max(0, distanceKm)
@@ -48,13 +53,33 @@ export function idealElapsedSecondsAtDistance(distanceKm: number, sectors: Speed
 
   for (const sector of sorted) {
     if (distance <= sector.fromKm + EPSILON) break
+
     const segmentEnd = Math.min(distance, sector.toKm)
     const segmentKm = Math.max(0, segmentEnd - sector.fromKm)
     seconds += (segmentKm / sector.speedKph) * 3600
+
     if (distance <= sector.toKm + EPSILON) break
   }
 
   return seconds
+}
+
+/** Travel time prescribed by the speed chart between two absolute distances. */
+export function idealTravelSecondsBetween(fromKm: number, toKm: number, sectors: SpeedSector[]): number {
+  return idealElapsedSecondsAtDistance(toKm, sectors) - idealElapsedSecondsAtDistance(fromKm, sectors)
+}
+
+/**
+ * Ideal elapsed time after an arbitrary TC timing reset.
+ * anchorIdealElapsedSeconds is the new ideal clock value at anchorDistanceKm.
+ */
+export function idealElapsedSecondsFromAnchor(
+  distanceKm: number,
+  sectors: SpeedSector[],
+  anchorDistanceKm: number,
+  anchorIdealElapsedSeconds: number
+): number {
+  return anchorIdealElapsedSeconds + idealTravelSecondsBetween(anchorDistanceKm, distanceKm, sectors)
 }
 
 export function sectorIndexAtDistance(distanceKm: number, sectors: SpeedSector[]): number {
@@ -88,8 +113,8 @@ export function nextSpeedChange(distanceKm: number, sectors: SpeedSector[]): { d
   }
 }
 
-export function deviationSeconds(actualElapsedSeconds: number, distanceKm: number, sectors: SpeedSector[]): number {
-  return actualElapsedSeconds - idealElapsedSecondsAtDistance(distanceKm, sectors)
+export function deviationSeconds(actualElapsedSeconds: number, idealElapsedSeconds: number): number {
+  return actualElapsedSeconds - idealElapsedSeconds
 }
 
 export function formatElapsed(totalSeconds: number): string {
