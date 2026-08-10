@@ -1,26 +1,25 @@
-# TSD Rally V0.1
+# TSD Rally V0.4
 
-A deliberately simple, offline-first TSD rally computer for a navigator using a physical roadbook plus organiser-supplied speed chart.
+A deliberately simple, Android-first TSD rally PWA.
 
-## V0.1 scope
+## V0.4 additions
 
-- Speed-chart entry by distance sector
-- Official start date/time and automatic armed start
-- Live high-accuracy browser GPS watch
-- Cumulative GPS odometer with basic noise/jump rejection
-- Calibration factor from official vs measured calibration distance
-- Manual `-10 m`, `+10 m`, and `SET ODO` correction
-- Live ideal-vs-actual timing deviation in seconds
-- Automatic target-speed changes by rally odometer distance
-- Next speed-change distance
-- Offline PWA cache
-- Screen Wake Lock request while armed/running
-- Local persistence of settings/session/GPS raw trip
-- Simulation mode for desk testing
+- DZ/FZ entries can be inserted into the speed chart.
+- A DZ/FZ can be prescribed by either:
+  - speed, in which case ideal time is calculated from distance / speed; or
+  - total zone time, in which case that exact duration is added to the timing model.
+- Fixed-time zones are paced linearly across their distance so the live EARLY/LATE meter remains useful inside the zone and is exact at the exit.
+- TCs now create a persistent session log entry before the timing reset.
+- Each TC log stores rally odometer distance, clock time, EARLY/LATE status, scratch applied and GPS accuracy.
+- END SESSION freezes the run and displays a session summary plus the complete TC log.
 
-## Critical operating principle
+## Existing behaviour retained
 
-The organiser's roadbook distance is the master reference. GPS is only the measuring instrument. Calibrate before the rally and correct the app odometer whenever a trustworthy roadbook distance reference is available.
+- V0.3 local-storage keys are retained so an existing phone setup survives the upgrade.
+- GPS starts automatically.
+- TC can occur anywhere and resets timing using the configured scratch time.
+- Manual odometer correction and optional calibration remain available.
+- The rally screen remains intentionally bold and minimal.
 
 ## Local development
 
@@ -36,26 +35,4 @@ npm run dev
 npm run build
 ```
 
-## Vercel
-
-1. Push this folder to a GitHub repository.
-2. Import the repository into Vercel.
-3. Framework preset: Vite. No `vercel.json` is required for V0.1 because the app uses a single page without client-side URL routes.
-4. Build command: `npm run build`.
-5. Output directory: `dist`.
-6. Deploy.
-7. Open the HTTPS URL on the rally phone and allow precise location.
-8. Add/install the PWA to the home screen.
-
-## Before using it in an event
-
-- Confirm electronic/GPS rally computers are permitted by your event/class regulations.
-- Keep the app in the foreground during competitive sections.
-- Disable battery optimisation for the browser/PWA if Android allows it.
-- Test GPS permission, wake lock and offline reload on the actual phone.
-- Run a calibration route and a mock TSD route before rally day.
-- Carry the organiser's roadbook and a backup timing method. V0.1 is new software, not a homologated rally computer.
-
-## GPS filter currently used
-
-The first build rejects fixes with >50 m reported accuracy, impossible jumps above 180 km/h, tiny movements below an accuracy-aware noise gate, and small position movements when the device reports near-zero speed. This must be tuned from real road-test data rather than theory.
+Deploy the repository to Vercel using the Vite preset and `dist` output directory.
