@@ -395,15 +395,7 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
           <div className="zone-entry" key={segment.id}>
             <div className="zone-entry-head">
               <div className="zone-title-row">
-                <select
-                  aria-label={`Zone type ${index + 1}`}
-                  value={segment.zoneType ?? 'FZ'}
-                  onChange={(e) => updateSegment(segment.id, { zoneType: e.target.value as 'DZ' | 'FZ' })}
-                >
-                  <option value="DZ">DZ</option>
-                  <option value="FZ">FZ</option>
-                </select>
-                <strong>ZONE</strong>
+                <strong>DZ/FZ</strong>
               </div>
               <button className="delete-text-button" onClick={() => removeSector(segment.id)}>REMOVE</button>
             </div>
@@ -598,7 +590,7 @@ function RallyScreen(props: RallyScreenProps) {
 
           <section className="target-card">
             <div>
-              <span>{inZone ? `${currentSegment?.zoneType ?? 'FZ'} ${currentZoneBasis === 'time' ? 'TIME' : 'SPEED'}` : 'TARGET'}</span>
+              <span>{inZone ? `DZ/FZ ${currentZoneBasis === 'time' ? 'TIME' : 'SPEED'}` : 'TARGET'}</span>
               {inZone && currentZoneBasis === 'time' ? (
                 <strong className="time-target">{formatDuration(currentSegment?.zoneDurationSeconds ?? 0)}</strong>
               ) : (
