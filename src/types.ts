@@ -38,6 +38,8 @@ export type TcLog = {
   gpsAccuracyM: number | null
   lat: number | null
   lon: number | null
+  officialRestartMs?: number | null
+  scratchOverridden?: boolean
 }
 
 export type RallySession = {
@@ -50,6 +52,7 @@ export type RallySession = {
   timingAnchorIdealElapsedSeconds: number
   tcCount: number
   tcLogs?: TcLog[]
+  pendingRestartTcId?: string | null
 }
 
 export type GpsPoint = {
