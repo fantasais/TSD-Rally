@@ -31,6 +31,40 @@ function localDateTimeValue(date = new Date(Date.now() + 5 * 60_000)) {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
+function timeInputValue(ms = Date.now()) {
+  const date = new Date(ms)
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+function restartMsFromClock(clockValue: string, tcHitMs: number): number | null {
+  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(clockValue.trim())
+  if (!match) return null
+
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  const seconds = Number(match[3] ?? 0)
+  if (hours > 23 || minutes > 59 || seconds > 59) return null
+
+  const tcDate = new Date(tcHitMs)
+  const restart = new Date(
+    tcDate.getFullYear(),
+    tcDate.getMonth(),
+    tcDate.getDate(),
+    hours,
+    minutes,
+    seconds,
+    0
+  )
+
+  // If a rally crosses midnight, a small clock time after a late-night TC belongs to the next day.
+  if (restart.getTime() < tcHitMs && tcHitMs - restart.getTime() > 12 * 60 * 60 * 1000) {
+    restart.setDate(restart.getDate() + 1)
+  }
+
+  return restart.getTime()
+}
+
 const DEFAULT_SETTINGS: RallySettings = {
   startDateTime: localDateTimeValue(),
   calibrationFactor: 1,
@@ -51,7 +85,8 @@ const DEFAULT_SESSION: RallySession = {
   timingAnchorDistanceKm: 0,
   timingAnchorIdealElapsedSeconds: 0,
   tcCount: 0,
-  tcLogs: []
+  tcLogs: [],
+  pendingRestartTcId: null
 }
 
 function App() {
@@ -89,7 +124,8 @@ function App() {
             timingAnchorDistanceKm: 0,
             timingAnchorIdealElapsedSeconds: 0,
             tcCount: 0,
-            tcLogs: []
+            tcLogs: [],
+            pendingRestartTcId: null
           }
         : current)
     }
@@ -124,7 +160,8 @@ function App() {
     timingAnchorDistanceKm: 0,
     timingAnchorIdealElapsedSeconds: 0,
     tcCount: 0,
-    tcLogs: []
+    tcLogs: [],
+    pendingRestartTcId: null
   })
 
   const arm = () => {
@@ -162,7 +199,7 @@ function App() {
   const endSession = () => {
     if (session.status !== 'running') return
     if (!confirm('End this rally session and freeze the session log?')) return
-    setSession((current) => ({ ...current, status: 'stopped', stopMs: Date.now() }))
+    setSession((current) => ({ ...current, status: 'stopped', stopMs: Date.now(), pendingRestartTcId: null }))
   }
 
   const changeOdo = (deltaKm: number) => {
@@ -203,7 +240,9 @@ function App() {
       scratchSeconds: settings.scratchSeconds,
       gpsAccuracyM: gps.accuracyM,
       lat: point?.lat ?? null,
-      lon: point?.lon ?? null
+      lon: point?.lon ?? null,
+      officialRestartMs: null,
+      scratchOverridden: false
     }
 
     setSession((current) => ({
@@ -211,10 +250,46 @@ function App() {
       timingAnchorDistanceKm: rallyDistanceKm,
       timingAnchorIdealElapsedSeconds: hitElapsedSeconds + settings.scratchSeconds,
       tcCount: (current.tcLogs?.length ?? current.tcCount) + 1,
-      tcLogs: [...(current.tcLogs ?? []), log]
+      tcLogs: [...(current.tcLogs ?? []), log],
+      pendingRestartTcId: log.id
     }))
 
     if ('vibrate' in navigator) navigator.vibrate?.(60)
+  }
+
+  const applyOfficialRestart = (tcId: string, clockValue: string) => {
+    if (session.status !== 'running' || session.startMs === null) return
+
+    const tc = tcLogs.find((log) => log.id === tcId)
+    if (!tc) return
+
+    const restartMs = restartMsFromClock(clockValue, tc.hitMs)
+    if (restartMs === null) {
+      alert('Enter a valid official restart time.')
+      return
+    }
+    if (restartMs < tc.hitMs) {
+      alert('Official restart time cannot be before the TC arrival time.')
+      return
+    }
+
+    const anchorElapsedSeconds = Math.max(0, (restartMs - session.startMs) / 1000)
+
+    setSession((current) => ({
+      ...current,
+      timingAnchorDistanceKm: tc.odoKm,
+      timingAnchorIdealElapsedSeconds: anchorElapsedSeconds,
+      pendingRestartTcId: null,
+      tcLogs: (current.tcLogs ?? []).map((log) => log.id === tcId
+        ? { ...log, officialRestartMs: restartMs, scratchOverridden: true }
+        : log)
+    }))
+
+    if ('vibrate' in navigator) navigator.vibrate?.([70, 40, 70])
+  }
+
+  const dismissRestartOption = () => {
+    setSession((current) => ({ ...current, pendingRestartTcId: null }))
   }
 
   return (
@@ -265,6 +340,7 @@ function App() {
           wakeHeld={wake.held}
           wakeSupported={wake.supported}
           tcLogs={tcLogs}
+          pendingRestartTcId={session.pendingRestartTcId ?? null}
           arm={arm}
           startNow={startNow}
           endSession={endSession}
@@ -272,6 +348,8 @@ function App() {
           changeOdo={changeOdo}
           setOdo={setOdo}
           markTc={markTc}
+          applyOfficialRestart={applyOfficialRestart}
+          dismissRestartOption={dismissRestartOption}
         />
       )}
 
@@ -481,6 +559,7 @@ type RallyScreenProps = {
   wakeHeld: boolean
   wakeSupported: boolean
   tcLogs: TcLog[]
+  pendingRestartTcId: string | null
   arm: () => void
   startNow: () => void
   endSession: () => void
@@ -488,6 +567,8 @@ type RallyScreenProps = {
   changeOdo: (deltaKm: number) => void
   setOdo: () => void
   markTc: () => void
+  applyOfficialRestart: (tcId: string, clockValue: string) => void
+  dismissRestartOption: () => void
 }
 
 function timingState(seconds: number) {
@@ -505,8 +586,16 @@ function RallyScreen(props: RallyScreenProps) {
   const {
     status, startMs, stopMs, nowMs, deltaSeconds, targetSpeed, currentSegment, rallyDistanceKm, remainingKm, nextChange,
     actualElapsedSeconds, idealElapsedSeconds, gpsSpeedKph, gpsEnabled, gpsError, wakeHeld, wakeSupported, tcLogs,
-    arm, startNow, endSession, resetRun, changeOdo, setOdo, markTc
+    pendingRestartTcId, arm, startNow, endSession, resetRun, changeOdo, setOdo, markTc,
+    applyOfficialRestart, dismissRestartOption
   } = props
+
+  const activeTcLog = pendingRestartTcId ? (tcLogs.find((log) => log.id === pendingRestartTcId) ?? null) : null
+  const [restartTime, setRestartTime] = useState('')
+
+  useEffect(() => {
+    if (activeTcLog) setRestartTime(timeInputValue())
+  }, [activeTcLog?.id])
 
   const waitingSeconds = status === 'armed' && startMs ? Math.max(0, (startMs - nowMs) / 1000) : 0
   const timingClass = deltaSeconds > 0.8 ? 'late' : deltaSeconds < -0.8 ? 'early' : 'on-time'
@@ -552,7 +641,10 @@ function RallyScreen(props: RallyScreenProps) {
               <div><span>ODO</span><strong>{log.odoKm.toFixed(3)} km</strong></div>
               <div><span>TIME</span><strong>{clockTime(log.hitMs)}</strong></div>
               <div><span>STATUS</span><strong>{formatDeviation(log.deviationSeconds)} {timingState(log.deviationSeconds)}</strong></div>
-              <div><span>SCRATCH</span><strong>{formatDuration(log.scratchSeconds)}</strong></div>
+              <div>
+                <span>{log.officialRestartMs ? 'RESTART' : 'SCRATCH'}</span>
+                <strong>{log.officialRestartMs ? `${clockTime(log.officialRestartMs)} · SCRATCH OVERRIDDEN` : formatDuration(log.scratchSeconds)}</strong>
+              </div>
               <div><span>GPS</span><strong>{log.gpsAccuracyM === null ? '—' : `${Math.round(log.gpsAccuracyM)} m`}</strong></div>
             </div>
           ))}
@@ -616,6 +708,21 @@ function RallyScreen(props: RallyScreenProps) {
           </section>
 
           <button className="tc-button" onClick={markTc}>TC</button>
+
+          {activeTcLog && (
+            <section className="panel">
+              <div className="eyebrow">TC {String(activeTcLog.number).padStart(2, '0')} RECORDED</div>
+              <h2>NEW START TIME?</h2>
+              <p className="section-copy">Normal scratch is active. Use this only if the marshal gives you an official new start time.</p>
+              <label>OFFICIAL RESTART TIME
+                <input type="time" step="1" value={restartTime} onChange={(e) => setRestartTime(e.target.value)} />
+              </label>
+              <div className="launch-row">
+                <button className="primary-button" onClick={() => applyOfficialRestart(activeTcLog.id, restartTime)}>APPLY NEW START</button>
+                <button className="secondary-button" onClick={dismissRestartOption}>DISMISS</button>
+              </div>
+            </section>
+          )}
 
           <section className="odo-controls">
             <button onClick={() => changeOdo(-0.01)}>−10 m</button>
