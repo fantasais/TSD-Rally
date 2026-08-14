@@ -382,77 +382,143 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
     updateSegment(id, { [field]: Number(value) })
   }
 
+  const revealNewEntry = (id: string) => {
+    // Wait for React to render the new row, then keep the navigator at the latest entry.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const entry = document.getElementById(`chart-entry-${id}`)
+        entry?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        const input = entry?.querySelector<HTMLInputElement>('[data-new-entry-focus="true"]')
+        input?.focus()
+        input?.select()
+      })
+    })
+  }
+
   const addSector = () => {
+    const id = crypto.randomUUID()
+
     setSettings((current) => {
       const sorted = sortSectors(current.sectors)
       const last = sorted[sorted.length - 1]
       const from = last?.toKm ?? 0
+
       return {
         ...current,
-        sectors: [...sorted, { id: crypto.randomUUID(), fromKm: from, toKm: from + 5, speedKph: 30, kind: 'speed' }]
+        sectors: [
+          ...sorted,
+          {
+            id,
+            fromKm: from,
+            toKm: from + 5,
+            speedKph: 30,
+            kind: 'speed'
+          }
+        ]
       }
     })
+
+    revealNewEntry(id)
   }
 
   const addZone = () => {
+    const id = crypto.randomUUID()
+
     setSettings((current) => {
       const sorted = sortSectors(current.sectors)
       const last = sorted[sorted.length - 1]
       const from = last?.toKm ?? 0
+
       return {
         ...current,
-        sectors: [...sorted, {
-          id: crypto.randomUUID(),
-          fromKm: from,
-          toKm: from + 2,
-          speedKph: 20,
-          kind: 'zone',
-          zoneType: 'FZ',
-          zoneBasis: 'speed',
-          zoneDurationSeconds: 120
-        }]
+        sectors: [
+          ...sorted,
+          {
+            id,
+            fromKm: from,
+            toKm: from + 2,
+            speedKph: 20,
+            kind: 'zone',
+            zoneType: 'FZ',
+            zoneBasis: 'speed',
+            zoneDurationSeconds: 120
+          }
+        ]
       }
     })
+
+    revealNewEntry(id)
   }
 
   const removeSector = (id: string) => {
-    setSettings((current) => ({ ...current, sectors: current.sectors.filter((segment) => segment.id !== id) }))
+    setSettings((current) => ({
+      ...current,
+      sectors: current.sectors.filter((segment) => segment.id !== id)
+    }))
   }
 
   const setZoneMinutes = (segment: SpeedSector, minutes: number) => {
     const secondsPart = Math.max(0, segment.zoneDurationSeconds ?? 0) % 60
-    updateSegment(segment.id, { zoneDurationSeconds: Math.max(0, Math.round(minutes)) * 60 + secondsPart })
+    updateSegment(segment.id, {
+      zoneDurationSeconds: Math.max(0, Math.round(minutes)) * 60 + secondsPart
+    })
   }
 
   const setZoneSecondsPart = (segment: SpeedSector, secondsPart: number) => {
     const minutes = Math.floor(Math.max(0, segment.zoneDurationSeconds ?? 0) / 60)
-    updateSegment(segment.id, { zoneDurationSeconds: minutes * 60 + Math.max(0, Math.min(59, Math.round(secondsPart))) })
+    updateSegment(segment.id, {
+      zoneDurationSeconds: minutes * 60 + Math.max(0, Math.min(59, Math.round(secondsPart)))
+    })
   }
 
   const setScratchMinutes = (minutes: number) => {
     const secondsPart = settings.scratchSeconds % 60
-    setSettings((current) => ({ ...current, scratchSeconds: Math.max(0, Math.round(minutes)) * 60 + secondsPart }))
+    setSettings((current) => ({
+      ...current,
+      scratchSeconds: Math.max(0, Math.round(minutes)) * 60 + secondsPart
+    }))
   }
 
   const setScratchSecondsPart = (secondsPart: number) => {
     const minutes = Math.floor(settings.scratchSeconds / 60)
-    setSettings((current) => ({ ...current, scratchSeconds: minutes * 60 + Math.max(0, Math.min(59, Math.round(secondsPart))) }))
+    setSettings((current) => ({
+      ...current,
+      scratchSeconds: minutes * 60 + Math.max(0, Math.min(59, Math.round(secondsPart)))
+    }))
   }
 
   const calculateCalibration = () => {
     const official = Number(officialKm)
     const measured = Number(measuredKm)
+
     if (!(official > 0) || !(measured > 0)) return
-    setSettings((current) => ({ ...current, calibrationFactor: official / measured }))
+
+    setSettings((current) => ({
+      ...current,
+      calibrationFactor: official / measured
+    }))
   }
 
   return (
     <main className="content setup-screen">
       <section className="panel start-panel">
         <h2>START</h2>
-        <label>Official start time
-          <input type="datetime-local" step="1" value={settings.startDateTime} onChange={(e) => setSettings((s) => ({ ...s, startDateTime: e.target.value }))} />
+
+        <label>
+          Official start time
+          <input
+            type="datetime-local"
+            step="1"
+            value={settings.startDateTime}
+            onChange={(e) =>
+              setSettings((s) => ({
+                ...s,
+                startDateTime: e.target.value
+              }))
+            }
+          />
         </label>
+
         <div className="launch-row">
           <button className="primary-button" onClick={arm}>ARM START</button>
           <button className="secondary-button" onClick={startNow}>START NOW</button>
@@ -462,80 +528,287 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
       <section className="panel speed-chart-panel">
         <div className="section-head">
           <h2>SPEED CHART</h2>
-          <div className="chart-add-buttons">
-            <button className="small-button" onClick={addSector}>+ SPEED</button>
-            <button className="small-button zone-add" onClick={addZone}>+ DZ/FZ</button>
-          </div>
         </div>
-        <p className="section-copy">Enter the chart in distance order. Add DZ/FZ only where it appears in the official speed chart.</p>
 
-        {sortSectors(settings.sectors).map((segment, index) => segmentKind(segment) === 'zone' ? (
-          <div className="zone-entry" key={segment.id}>
-            <div className="zone-entry-head">
-              <div className="zone-title-row">
-                <strong>DZ/FZ</strong>
+        <p className="section-copy">
+          Enter the chart in distance order. Add DZ/FZ only where it appears in the official speed chart.
+        </p>
+
+        {sortSectors(settings.sectors).map((segment, index) =>
+          segmentKind(segment) === 'zone' ? (
+            <div
+              className="zone-entry"
+              id={`chart-entry-${segment.id}`}
+              key={segment.id}
+            >
+              <div className="zone-entry-head">
+                <div className="zone-title-row">
+                  <strong>DZ/FZ</strong>
+                </div>
+
+                <button
+                  className="delete-text-button"
+                  onClick={() => removeSector(segment.id)}
+                >
+                  REMOVE
+                </button>
               </div>
-              <button className="delete-text-button" onClick={() => removeSector(segment.id)}>REMOVE</button>
-            </div>
 
-            <div className="zone-distance-grid">
-              <label>FROM km<input inputMode="decimal" type="number" step="0.001" value={segment.fromKm} onChange={(e) => updateNumber(segment.id, 'fromKm', e.target.value)} /></label>
-              <label>TO km<input inputMode="decimal" type="number" step="0.001" value={segment.toKm} onChange={(e) => updateNumber(segment.id, 'toKm', e.target.value)} /></label>
-            </div>
+              <div className="zone-distance-grid">
+                <label>
+                  FROM km
+                  <input
+                    inputMode="decimal"
+                    type="number"
+                    step="0.001"
+                    value={segment.fromKm}
+                    onChange={(e) =>
+                      updateNumber(segment.id, 'fromKm', e.target.value)
+                    }
+                  />
+                </label>
 
-            <div className="zone-basis-toggle">
-              <button className={zoneBasis(segment) === 'speed' ? 'active' : ''} onClick={() => updateSegment(segment.id, { zoneBasis: 'speed' })}>SPEED</button>
-              <button className={zoneBasis(segment) === 'time' ? 'active' : ''} onClick={() => updateSegment(segment.id, { zoneBasis: 'time' })}>TIME</button>
-            </div>
-
-            {zoneBasis(segment) === 'speed' ? (
-              <label className="zone-value-field">ZONE SPEED km/h
-                <input inputMode="decimal" type="number" step="0.1" value={segment.speedKph} onChange={(e) => updateNumber(segment.id, 'speedKph', e.target.value)} />
-              </label>
-            ) : (
-              <div className="zone-time-fields">
-                <label>MIN<input type="number" min="0" step="1" value={Math.floor(Math.max(0, segment.zoneDurationSeconds ?? 0) / 60)} onChange={(e) => setZoneMinutes(segment, Number(e.target.value))} /></label>
-                <label>SEC<input type="number" min="0" max="59" step="1" value={Math.max(0, segment.zoneDurationSeconds ?? 0) % 60} onChange={(e) => setZoneSecondsPart(segment, Number(e.target.value))} /></label>
+                <label>
+                  TO km
+                  <input
+                    data-new-entry-focus="true"
+                    inputMode="decimal"
+                    type="number"
+                    step="0.001"
+                    value={segment.toKm}
+                    onChange={(e) =>
+                      updateNumber(segment.id, 'toKm', e.target.value)
+                    }
+                  />
+                </label>
               </div>
-            )}
-          </div>
-        ) : (
-          <div className="speed-entry" key={segment.id}>
-            <div className="speed-entry-label">SPEED {String(index + 1).padStart(2, '0')}</div>
-            <div className="sector-row">
-              <label>FROM km<input inputMode="decimal" type="number" step="0.001" value={segment.fromKm} onChange={(e) => updateNumber(segment.id, 'fromKm', e.target.value)} /></label>
-              <label>TO km<input inputMode="decimal" type="number" step="0.001" value={segment.toKm} onChange={(e) => updateNumber(segment.id, 'toKm', e.target.value)} /></label>
-              <label>AVG km/h<input inputMode="decimal" type="number" step="0.1" value={segment.speedKph} onChange={(e) => updateNumber(segment.id, 'speedKph', e.target.value)} /></label>
-              <button className="delete-button" aria-label="Delete speed entry" onClick={() => removeSector(segment.id)}>×</button>
+
+              <div className="zone-basis-toggle">
+                <button
+                  className={zoneBasis(segment) === 'speed' ? 'active' : ''}
+                  onClick={() =>
+                    updateSegment(segment.id, { zoneBasis: 'speed' })
+                  }
+                >
+                  SPEED
+                </button>
+
+                <button
+                  className={zoneBasis(segment) === 'time' ? 'active' : ''}
+                  onClick={() =>
+                    updateSegment(segment.id, { zoneBasis: 'time' })
+                  }
+                >
+                  TIME
+                </button>
+              </div>
+
+              {zoneBasis(segment) === 'speed' ? (
+                <label className="zone-value-field">
+                  ZONE SPEED km/h
+                  <input
+                    inputMode="decimal"
+                    type="number"
+                    step="0.1"
+                    value={segment.speedKph}
+                    onChange={(e) =>
+                      updateNumber(segment.id, 'speedKph', e.target.value)
+                    }
+                  />
+                </label>
+              ) : (
+                <div className="zone-time-fields">
+                  <label>
+                    MIN
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={Math.floor(
+                        Math.max(0, segment.zoneDurationSeconds ?? 0) / 60
+                      )}
+                      onChange={(e) =>
+                        setZoneMinutes(segment, Number(e.target.value))
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    SEC
+                    <input
+                      type="number"
+                      min="0"
+                      max="59"
+                      step="1"
+                      value={
+                        Math.max(0, segment.zoneDurationSeconds ?? 0) % 60
+                      }
+                      onChange={(e) =>
+                        setZoneSecondsPart(segment, Number(e.target.value))
+                      }
+                    />
+                  </label>
+                </div>
+              )}
             </div>
+          ) : (
+            <div
+              className="speed-entry"
+              id={`chart-entry-${segment.id}`}
+              key={segment.id}
+            >
+              <div className="speed-entry-label">
+                SPEED {String(index + 1).padStart(2, '0')}
+              </div>
+
+              <div className="sector-row">
+                <label>
+                  FROM km
+                  <input
+                    inputMode="decimal"
+                    type="number"
+                    step="0.001"
+                    value={segment.fromKm}
+                    onChange={(e) =>
+                      updateNumber(segment.id, 'fromKm', e.target.value)
+                    }
+                  />
+                </label>
+
+                <label>
+                  TO km
+                  <input
+                    data-new-entry-focus="true"
+                    inputMode="decimal"
+                    type="number"
+                    step="0.001"
+                    value={segment.toKm}
+                    onChange={(e) =>
+                      updateNumber(segment.id, 'toKm', e.target.value)
+                    }
+                  />
+                </label>
+
+                <label>
+                  AVG km/h
+                  <input
+                    inputMode="decimal"
+                    type="number"
+                    step="0.1"
+                    value={segment.speedKph}
+                    onChange={(e) =>
+                      updateNumber(segment.id, 'speedKph', e.target.value)
+                    }
+                  />
+                </label>
+
+                <button
+                  className="delete-button"
+                  aria-label="Delete speed entry"
+                  onClick={() => removeSector(segment.id)}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          )
+        )}
+
+        <div className="chart-add-buttons">
+          <button className="small-button" onClick={addSector}>
+            + SPEED
+          </button>
+
+          <button className="small-button zone-add" onClick={addZone}>
+            + DZ/FZ
+          </button>
+        </div>
+
+        {errors.length > 0 && (
+          <div className="error-box">
+            {errors.map((error) => (
+              <div key={error}>{error}</div>
+            ))}
           </div>
-        ))}
-        {errors.length > 0 && <div className="error-box">{errors.map((error) => <div key={error}>{error}</div>)}</div>}
+        )}
       </section>
 
       <section className="panel scratch-panel">
         <h2>TC SCRATCH TIME</h2>
+
         <div className="scratch-fields">
-          <label>MIN
-            <input type="number" min="0" step="1" value={Math.floor(settings.scratchSeconds / 60)} onChange={(e) => setScratchMinutes(Number(e.target.value))} />
+          <label>
+            MIN
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={Math.floor(settings.scratchSeconds / 60)}
+              onChange={(e) => setScratchMinutes(Number(e.target.value))}
+            />
           </label>
-          <label>SEC
-            <input type="number" min="0" max="59" step="1" value={settings.scratchSeconds % 60} onChange={(e) => setScratchSecondsPart(Number(e.target.value))} />
+
+          <label>
+            SEC
+            <input
+              type="number"
+              min="0"
+              max="59"
+              step="1"
+              value={settings.scratchSeconds % 60}
+              onChange={(e) =>
+                setScratchSecondsPart(Number(e.target.value))
+              }
+            />
           </label>
         </div>
       </section>
 
       <details className="panel calibration-panel">
-        <summary>ODOMETER CALIBRATION <span>OPTIONAL</span></summary>
+        <summary>
+          ODOMETER CALIBRATION <span>OPTIONAL</span>
+        </summary>
+
         <div className="two-col">
-          <label>Official km<input type="number" step="0.001" value={officialKm} onChange={(e) => setOfficialKm(e.target.value)} /></label>
-          <label>GPS measured km<input type="number" step="0.001" value={measuredKm} onChange={(e) => setMeasuredKm(e.target.value)} /></label>
+          <label>
+            Official km
+            <input
+              type="number"
+              step="0.001"
+              value={officialKm}
+              onChange={(e) => setOfficialKm(e.target.value)}
+            />
+          </label>
+
+          <label>
+            GPS measured km
+            <input
+              type="number"
+              step="0.001"
+              value={measuredKm}
+              onChange={(e) => setMeasuredKm(e.target.value)}
+            />
+          </label>
         </div>
-        <button className="secondary-button full-button" onClick={calculateCalibration}>CALCULATE</button>
-        <div className="factor-line">FACTOR <strong>{settings.calibrationFactor.toFixed(6)}</strong></div>
+
+        <button
+          className="secondary-button full-button"
+          onClick={calculateCalibration}
+        >
+          CALCULATE
+        </button>
+
+        <div className="factor-line">
+          FACTOR <strong>{settings.calibrationFactor.toFixed(6)}</strong>
+        </div>
       </details>
 
-      {gpsError && <div className="error-box">GPS: {gpsError}. Location starts automatically; allow precise location in the browser/app settings.</div>}
+      {gpsError && (
+        <div className="error-box">
+          GPS: {gpsError}. Location starts automatically; allow precise
+          location in the browser/app settings.
+        </div>
+      )}
     </main>
   )
 }
@@ -579,38 +852,93 @@ function timingState(seconds: number) {
 
 function clockTime(ms: number | null) {
   if (ms === null) return '—'
-  return new Date(ms).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
+  return new Date(ms).toLocaleTimeString([], {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  })
 }
 
 function RallyScreen(props: RallyScreenProps) {
   const {
-    status, startMs, stopMs, nowMs, deltaSeconds, targetSpeed, currentSegment, rallyDistanceKm, remainingKm, nextChange,
-    actualElapsedSeconds, idealElapsedSeconds, gpsSpeedKph, gpsEnabled, gpsError, wakeHeld, wakeSupported, tcLogs,
-    pendingRestartTcId, arm, startNow, endSession, resetRun, changeOdo, setOdo, markTc,
-    applyOfficialRestart, dismissRestartOption
+    status,
+    startMs,
+    stopMs,
+    nowMs,
+    deltaSeconds,
+    targetSpeed,
+    currentSegment,
+    rallyDistanceKm,
+    remainingKm,
+    nextChange,
+    actualElapsedSeconds,
+    idealElapsedSeconds,
+    gpsSpeedKph,
+    gpsEnabled,
+    gpsError,
+    wakeHeld,
+    wakeSupported,
+    tcLogs,
+    pendingRestartTcId,
+    arm,
+    startNow,
+    endSession,
+    resetRun,
+    changeOdo,
+    setOdo,
+    markTc,
+    applyOfficialRestart,
+    dismissRestartOption
   } = props
 
-  const activeTcLog = pendingRestartTcId ? (tcLogs.find((log) => log.id === pendingRestartTcId) ?? null) : null
+  const activeTcLog = pendingRestartTcId
+    ? tcLogs.find((log) => log.id === pendingRestartTcId) ?? null
+    : null
+
   const [restartTime, setRestartTime] = useState('')
 
   useEffect(() => {
     if (activeTcLog) setRestartTime(timeInputValue())
   }, [activeTcLog?.id])
 
-  const waitingSeconds = status === 'armed' && startMs ? Math.max(0, (startMs - nowMs) / 1000) : 0
-  const timingClass = deltaSeconds > 0.8 ? 'late' : deltaSeconds < -0.8 ? 'early' : 'on-time'
+  const waitingSeconds =
+    status === 'armed' && startMs
+      ? Math.max(0, (startMs - nowMs) / 1000)
+      : 0
+
+  const timingClass =
+    deltaSeconds > 0.8
+      ? 'late'
+      : deltaSeconds < -0.8
+        ? 'early'
+        : 'on-time'
+
   const stateLabel = timingState(deltaSeconds)
-  const inZone = currentSegment !== null && segmentKind(currentSegment) === 'zone'
-  const currentZoneBasis = currentSegment ? zoneBasis(currentSegment) : 'speed'
+
+  const inZone =
+    currentSegment !== null && segmentKind(currentSegment) === 'zone'
+
+  const currentZoneBasis = currentSegment
+    ? zoneBasis(currentSegment)
+    : 'speed'
 
   if (status === 'idle') {
     return (
       <main className="content rally-empty">
         <div className="empty-card">
           <div className="eyebrow">RALLY COMPUTER READY</div>
+
           <h1>Set the speed chart, then arm the start.</h1>
-          <button className="primary-button" onClick={arm}>ARM START</button>
-          <button className="secondary-button" onClick={startNow}>START NOW</button>
+
+          <button className="primary-button" onClick={arm}>
+            ARM START
+          </button>
+
+          <button className="secondary-button" onClick={startNow}>
+            START NOW
+          </button>
         </div>
       </main>
     )
@@ -621,36 +949,102 @@ function RallyScreen(props: RallyScreenProps) {
       <main className="content session-log-screen">
         <section className="panel session-summary">
           <div className="eyebrow">SESSION COMPLETE</div>
+
           <h1>SESSION LOG</h1>
+
           <div className="summary-grid">
-            <div><span>DISTANCE</span><strong>{rallyDistanceKm.toFixed(3)}</strong><small>km</small></div>
-            <div><span>ELAPSED</span><strong>{formatElapsed(actualElapsedSeconds)}</strong></div>
-            <div><span>TCs</span><strong>{tcLogs.length}</strong></div>
-            <div><span>FINAL</span><strong>{formatDeviation(deltaSeconds)}</strong><small>{stateLabel}</small></div>
+            <div>
+              <span>DISTANCE</span>
+              <strong>{rallyDistanceKm.toFixed(3)}</strong>
+              <small>km</small>
+            </div>
+
+            <div>
+              <span>ELAPSED</span>
+              <strong>{formatElapsed(actualElapsedSeconds)}</strong>
+            </div>
+
+            <div>
+              <span>TCs</span>
+              <strong>{tcLogs.length}</strong>
+            </div>
+
+            <div>
+              <span>FINAL</span>
+              <strong>{formatDeviation(deltaSeconds)}</strong>
+              <small>{stateLabel}</small>
+            </div>
           </div>
-          <div className="session-times"><span>START {clockTime(startMs)}</span><span>END {clockTime(stopMs)}</span></div>
+
+          <div className="session-times">
+            <span>START {clockTime(startMs)}</span>
+            <span>END {clockTime(stopMs)}</span>
+          </div>
         </section>
 
         <section className="panel tc-log-panel">
           <h2>TIME CONTROLS</h2>
+
           {tcLogs.length === 0 ? (
-            <p className="empty-log">No TCs were marked in this session.</p>
-          ) : tcLogs.map((log) => (
-            <div className="tc-log-row" key={log.id}>
-              <div className="tc-log-number">TC {String(log.number).padStart(2, '0')}</div>
-              <div><span>ODO</span><strong>{log.odoKm.toFixed(3)} km</strong></div>
-              <div><span>TIME</span><strong>{clockTime(log.hitMs)}</strong></div>
-              <div><span>STATUS</span><strong>{formatDeviation(log.deviationSeconds)} {timingState(log.deviationSeconds)}</strong></div>
-              <div>
-                <span>{log.officialRestartMs ? 'RESTART' : 'SCRATCH'}</span>
-                <strong>{log.officialRestartMs ? `${clockTime(log.officialRestartMs)} · SCRATCH OVERRIDDEN` : formatDuration(log.scratchSeconds)}</strong>
+            <p className="empty-log">
+              No TCs were marked in this session.
+            </p>
+          ) : (
+            tcLogs.map((log) => (
+              <div className="tc-log-row" key={log.id}>
+                <div className="tc-log-number">
+                  TC {String(log.number).padStart(2, '0')}
+                </div>
+
+                <div>
+                  <span>ODO</span>
+                  <strong>{log.odoKm.toFixed(3)} km</strong>
+                </div>
+
+                <div>
+                  <span>TIME</span>
+                  <strong>{clockTime(log.hitMs)}</strong>
+                </div>
+
+                <div>
+                  <span>STATUS</span>
+                  <strong>
+                    {formatDeviation(log.deviationSeconds)}{' '}
+                    {timingState(log.deviationSeconds)}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>
+                    {log.officialRestartMs ? 'RESTART' : 'SCRATCH'}
+                  </span>
+
+                  <strong>
+                    {log.officialRestartMs
+                      ? `${clockTime(log.officialRestartMs)} · SCRATCH OVERRIDDEN`
+                      : formatDuration(log.scratchSeconds)}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>GPS</span>
+                  <strong>
+                    {log.gpsAccuracyM === null
+                      ? '—'
+                      : `${Math.round(log.gpsAccuracyM)} m`}
+                  </strong>
+                </div>
               </div>
-              <div><span>GPS</span><strong>{log.gpsAccuracyM === null ? '—' : `${Math.round(log.gpsAccuracyM)} m`}</strong></div>
-            </div>
-          ))}
+            ))
+          )}
         </section>
 
-        <button className="primary-button full-button" onClick={resetRun}>NEW SESSION</button>
+        <button
+          className="primary-button full-button"
+          onClick={resetRun}
+        >
+          NEW SESSION
+        </button>
       </main>
     )
   }
@@ -658,7 +1052,9 @@ function RallyScreen(props: RallyScreenProps) {
   const nextLabel = nextChange
     ? nextChange.nextKind === 'zone'
       ? nextChange.nextZoneBasis === 'time'
-        ? `${nextChange.nextZoneType} ${formatDuration(nextChange.nextZoneDurationSeconds ?? 0)}`
+        ? `${nextChange.nextZoneType} ${formatDuration(
+            nextChange.nextZoneDurationSeconds ?? 0
+          )}`
         : `${nextChange.nextZoneType} ${nextChange.nextSpeedKph.toFixed(1)}`
       : nextChange.nextSpeedKph.toFixed(1)
     : null
@@ -668,28 +1064,78 @@ function RallyScreen(props: RallyScreenProps) {
       {status === 'armed' ? (
         <section className="armed-card">
           <div className="eyebrow">ARMED</div>
-          <div className="countdown">{waitingSeconds.toFixed(1)}</div>
-          <div className="countdown-label">SECONDS TO START</div>
-          <div className="clock-line">START {clockTime(startMs)}</div>
-          <div className="rally-flags"><span>GPS {gpsEnabled ? 'LIVE' : 'OFF'}</span><span>WAKE {wakeHeld ? 'ON' : wakeSupported ? 'WAIT' : 'N/A'}</span></div>
+
+          <div className="countdown">
+            {waitingSeconds.toFixed(1)}
+          </div>
+
+          <div className="countdown-label">
+            SECONDS TO START
+          </div>
+
+          <div className="clock-line">
+            START {clockTime(startMs)}
+          </div>
+
+          <div className="rally-flags">
+            <span>GPS {gpsEnabled ? 'LIVE' : 'OFF'}</span>
+            <span>
+              WAKE{' '}
+              {wakeHeld
+                ? 'ON'
+                : wakeSupported
+                  ? 'WAIT'
+                  : 'N/A'}
+            </span>
+          </div>
         </section>
       ) : (
         <>
           <section className={`delta-card ${timingClass}`}>
-            <div className="delta-number">{formatDeviation(deltaSeconds)}</div>
-            <div className="delta-label">SECONDS {stateLabel}</div>
+            <div className="delta-number">
+              {formatDeviation(deltaSeconds)}
+            </div>
+
+            <div className="delta-label">
+              SECONDS {stateLabel}
+            </div>
           </section>
 
           <section className="target-card">
             <div>
-              <span>{inZone ? `DZ/FZ ${currentZoneBasis === 'time' ? 'TIME' : 'SPEED'}` : 'TARGET'}</span>
+              <span>
+                {inZone
+                  ? `DZ/FZ ${
+                      currentZoneBasis === 'time'
+                        ? 'TIME'
+                        : 'SPEED'
+                    }`
+                  : 'TARGET'}
+              </span>
+
               {inZone && currentZoneBasis === 'time' ? (
-                <strong className="time-target">{formatDuration(currentSegment?.zoneDurationSeconds ?? 0)}</strong>
+                <strong className="time-target">
+                  {formatDuration(
+                    currentSegment?.zoneDurationSeconds ?? 0
+                  )}
+                </strong>
               ) : (
-                <><strong>{targetSpeed.toFixed(1)}</strong><small>km/h</small></>
+                <>
+                  <strong>{targetSpeed.toFixed(1)}</strong>
+                  <small>km/h</small>
+                </>
               )}
             </div>
-            <div><span>GPS SPEED</span><strong>{gpsSpeedKph === null ? '—' : gpsSpeedKph.toFixed(1)}</strong><small>km/h</small></div>
+
+            <div>
+              <span>GPS SPEED</span>
+              <strong>
+                {gpsSpeedKph === null
+                  ? '—'
+                  : gpsSpeedKph.toFixed(1)}
+              </strong>
+              <small>km/h</small>
+            </div>
           </section>
 
           <section className="trip-card">
@@ -700,47 +1146,134 @@ function RallyScreen(props: RallyScreenProps) {
 
           <section className="next-card">
             <span>NEXT CHART CHANGE</span>
+
             {nextChange ? (
-              <div className="next-main"><strong>{nextChange.distanceKm.toFixed(3)} km</strong><b>→ {nextLabel}</b></div>
+              <div className="next-main">
+                <strong>
+                  {nextChange.distanceKm.toFixed(3)} km
+                </strong>
+
+                <b>→ {nextLabel}</b>
+              </div>
             ) : (
-              <div className="next-main"><strong>END OF CHART</strong><b>{remainingKm.toFixed(3)} km</b></div>
+              <div className="next-main">
+                <strong>END OF CHART</strong>
+                <b>{remainingKm.toFixed(3)} km</b>
+              </div>
             )}
           </section>
 
-          <button className="tc-button" onClick={markTc}>TC</button>
+          <button
+            className="tc-button"
+            onClick={markTc}
+          >
+            TC
+          </button>
 
           {activeTcLog && (
             <section className="panel">
-              <div className="eyebrow">TC {String(activeTcLog.number).padStart(2, '0')} RECORDED</div>
+              <div className="eyebrow">
+                TC {String(activeTcLog.number).padStart(2, '0')} RECORDED
+              </div>
+
               <h2>NEW START TIME?</h2>
-              <p className="section-copy">Normal scratch is active. Use this only if the marshal gives you an official new start time.</p>
-              <label>OFFICIAL RESTART TIME
-                <input type="time" step="1" value={restartTime} onChange={(e) => setRestartTime(e.target.value)} />
+
+              <p className="section-copy">
+                Normal scratch is active. Use this only if the marshal gives you an official new start time.
+              </p>
+
+              <label>
+                OFFICIAL RESTART TIME
+                <input
+                  type="time"
+                  step="1"
+                  value={restartTime}
+                  onChange={(e) =>
+                    setRestartTime(e.target.value)
+                  }
+                />
               </label>
+
               <div className="launch-row">
-                <button className="primary-button" onClick={() => applyOfficialRestart(activeTcLog.id, restartTime)}>APPLY NEW START</button>
-                <button className="secondary-button" onClick={dismissRestartOption}>DISMISS</button>
+                <button
+                  className="primary-button"
+                  onClick={() =>
+                    applyOfficialRestart(
+                      activeTcLog.id,
+                      restartTime
+                    )
+                  }
+                >
+                  APPLY NEW START
+                </button>
+
+                <button
+                  className="secondary-button"
+                  onClick={dismissRestartOption}
+                >
+                  DISMISS
+                </button>
               </div>
             </section>
           )}
 
           <section className="odo-controls">
-            <button onClick={() => changeOdo(-0.01)}>−10 m</button>
-            <button className="set-odo" onClick={setOdo}>SET ODO</button>
-            <button onClick={() => changeOdo(0.01)}>+10 m</button>
+            <button onClick={() => changeOdo(-0.01)}>
+              −10 m
+            </button>
+
+            <button
+              className="set-odo"
+              onClick={setOdo}
+            >
+              SET ODO
+            </button>
+
+            <button onClick={() => changeOdo(0.01)}>
+              +10 m
+            </button>
           </section>
 
           <section className="timing-strip">
-            <div><span>ACTUAL</span><strong>{formatElapsed(actualElapsedSeconds)}</strong></div>
-            <div><span>IDEAL</span><strong>{formatElapsed(idealElapsedSeconds)}</strong></div>
+            <div>
+              <span>ACTUAL</span>
+              <strong>
+                {formatElapsed(actualElapsedSeconds)}
+              </strong>
+            </div>
+
+            <div>
+              <span>IDEAL</span>
+              <strong>
+                {formatElapsed(idealElapsedSeconds)}
+              </strong>
+            </div>
           </section>
         </>
       )}
 
-      {gpsError && <div className="error-box">GPS: {gpsError}</div>}
+      {gpsError && (
+        <div className="error-box">
+          GPS: {gpsError}
+        </div>
+      )}
+
       <div className="rally-actions">
-        {status === 'running' && <button className="stop-button" onClick={endSession}>END SESSION</button>}
-        <button className="ghost-button" onClick={resetRun}>RESET RUN</button>
+        {status === 'running' && (
+          <button
+            className="stop-button"
+            onClick={endSession}
+          >
+            END SESSION
+          </button>
+        )}
+
+        <button
+          className="ghost-button"
+          onClick={resetRun}
+        >
+          RESET RUN
+        </button>
       </div>
     </main>
   )
