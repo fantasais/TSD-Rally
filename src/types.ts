@@ -1,4 +1,4 @@
-export type SegmentKind = 'speed' | 'zone'
+  export type SegmentKind = 'speed' | 'zone'
 export type ZoneType = 'DZ' | 'FZ'
 export type ZoneBasis = 'speed' | 'time'
 
@@ -42,6 +42,20 @@ export type TcLog = {
   scratchOverridden?: boolean
 }
 
+export type SftcLog = {
+  id: string
+  number: number
+  hitMs: number
+  cardTimeMs: number
+  odoKm: number
+  deviationSeconds: number
+  actualElapsedSeconds: number
+  idealElapsedSeconds: number
+  gpsAccuracyM: number | null
+  lat: number | null
+  lon: number | null
+}
+
 export type RallySession = {
   status: RallyStatus
   startMs: number | null
@@ -52,7 +66,9 @@ export type RallySession = {
   timingAnchorIdealElapsedSeconds: number
   tcCount: number
   tcLogs?: TcLog[]
+  sftcLogs?: SftcLog[]
   pendingRestartTcId?: string | null
+  pendingSftcId?: string | null
 }
 
 export type GpsPoint = {
