@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { RallySession, RallySettings, SpeedSector, TcLog } from './types'
+import type { RallySession, RallySettings, SpeedSector, SftcLog, TcLog } from './types'
 import { useGpsOdometer } from './hooks/useGpsOdometer'
 import { useWakeLock } from './hooks/useWakeLock'
 import {
@@ -86,7 +86,9 @@ const DEFAULT_SESSION: RallySession = {
   timingAnchorIdealElapsedSeconds: 0,
   tcCount: 0,
   tcLogs: [],
-  pendingRestartTcId: null
+  sftcLogs: [],
+  pendingRestartTcId: null,
+  pendingSftcId: null
 }
 
 function App() {
@@ -125,7 +127,9 @@ function App() {
             timingAnchorIdealElapsedSeconds: 0,
             tcCount: 0,
             tcLogs: [],
-            pendingRestartTcId: null
+            sftcLogs: [],
+            pendingRestartTcId: null,
+            pendingSftcId: null
           }
         : current)
     }
@@ -150,6 +154,7 @@ function App() {
   const routeKm = totalRouteKm(sortedSectors)
   const remainingKm = Math.max(0, routeKm - rallyDistanceKm)
   const tcLogs = session.tcLogs ?? []
+  const sftcLogs = session.sftcLogs ?? []
 
   const newRunSession = (status: RallySession['status'], startMs: number): RallySession => ({
     status,
@@ -161,7 +166,9 @@ function App() {
     timingAnchorIdealElapsedSeconds: 0,
     tcCount: 0,
     tcLogs: [],
-    pendingRestartTcId: null
+    sftcLogs: [],
+    pendingRestartTcId: null,
+    pendingSftcId: null
   })
 
   const arm = () => {
@@ -199,20 +206,35 @@ function App() {
   const endSession = () => {
     if (session.status !== 'running') return
     if (!confirm('End this rally session and freeze the session log?')) return
-    setSession((current) => ({ ...current, status: 'stopped', stopMs: Date.now(), pendingRestartTcId: null }))
+    setSession((current) => ({
+      ...current,
+      status: 'stopped',
+      stopMs: Date.now(),
+      pendingRestartTcId: null,
+      pendingSftcId: null
+    }))
   }
 
   const changeOdo = (deltaKm: number) => {
-    setSession((current) => ({ ...current, manualOffsetKm: current.manualOffsetKm + deltaKm }))
+    setSession((current) => ({
+      ...current,
+      manualOffsetKm: current.manualOffsetKm + deltaKm
+    }))
   }
 
   const setOdo = () => {
     const value = window.prompt('Set rally odometer (km)', rallyDistanceKm.toFixed(3))
     if (value === null) return
+
     const desiredKm = Number(value)
     if (!Number.isFinite(desiredKm) || desiredKm < 0) return
+
     const rawCorrectedKm = measuredKm * settings.calibrationFactor
-    setSession((current) => ({ ...current, manualOffsetKm: desiredKm - rawCorrectedKm }))
+
+    setSession((current) => ({
+      ...current,
+      manualOffsetKm: desiredKm - rawCorrectedKm
+    }))
   }
 
   const markTc = () => {
@@ -220,13 +242,19 @@ function App() {
 
     const hitMs = Date.now()
     const hitElapsedSeconds = Math.max(0, (hitMs - session.startMs) / 1000)
+
     const hitIdealElapsedSeconds = idealElapsedSecondsFromAnchor(
       rallyDistanceKm,
       sortedSectors,
       session.timingAnchorDistanceKm,
       session.timingAnchorIdealElapsedSeconds
     )
-    const hitDeviationSeconds = deviationSeconds(hitElapsedSeconds, hitIdealElapsedSeconds)
+
+    const hitDeviationSeconds = deviationSeconds(
+      hitElapsedSeconds,
+      hitIdealElapsedSeconds
+    )
+
     const point = gps.lastAcceptedPoint
 
     const log: TcLog = {
@@ -264,32 +292,106 @@ function App() {
     if (!tc) return
 
     const restartMs = restartMsFromClock(clockValue, tc.hitMs)
+
     if (restartMs === null) {
       alert('Enter a valid official restart time.')
       return
     }
+
     if (restartMs < tc.hitMs) {
       alert('Official restart time cannot be before the TC arrival time.')
       return
     }
 
-    const anchorElapsedSeconds = Math.max(0, (restartMs - session.startMs) / 1000)
+    const anchorElapsedSeconds = Math.max(
+      0,
+      (restartMs - session.startMs) / 1000
+    )
 
     setSession((current) => ({
       ...current,
       timingAnchorDistanceKm: tc.odoKm,
       timingAnchorIdealElapsedSeconds: anchorElapsedSeconds,
       pendingRestartTcId: null,
-      tcLogs: (current.tcLogs ?? []).map((log) => log.id === tcId
-        ? { ...log, officialRestartMs: restartMs, scratchOverridden: true }
-        : log)
+      tcLogs: (current.tcLogs ?? []).map((log) =>
+        log.id === tcId
+          ? {
+              ...log,
+              officialRestartMs: restartMs,
+              scratchOverridden: true
+            }
+          : log
+      )
     }))
 
-    if ('vibrate' in navigator) navigator.vibrate?.([70, 40, 70])
+    if ('vibrate' in navigator) {
+      navigator.vibrate?.([70, 40, 70])
+    }
   }
 
   const dismissRestartOption = () => {
-    setSession((current) => ({ ...current, pendingRestartTcId: null }))
+    setSession((current) => ({
+      ...current,
+      pendingRestartTcId: null
+    }))
+  }
+
+  const markSftc = () => {
+    if (session.status !== 'running' || session.startMs === null) return
+
+    const hitMs = Date.now()
+    const hitElapsedSeconds = Math.max(0, (hitMs - session.startMs) / 1000)
+
+    const hitIdealElapsedSeconds = idealElapsedSecondsFromAnchor(
+      rallyDistanceKm,
+      sortedSectors,
+      session.timingAnchorDistanceKm,
+      session.timingAnchorIdealElapsedSeconds
+    )
+
+    const hitDeviationSeconds = deviationSeconds(
+      hitElapsedSeconds,
+      hitIdealElapsedSeconds
+    )
+
+    const point = gps.lastAcceptedPoint
+
+    // Fractional seconds are deliberately omitted for the card time.
+    const cardTimeMs =
+      Math.floor(
+        (session.startMs + hitIdealElapsedSeconds * 1000) / 1000
+      ) * 1000
+
+    const log: SftcLog = {
+      id: crypto.randomUUID(),
+      number: sftcLogs.length + 1,
+      hitMs,
+      cardTimeMs,
+      odoKm: rallyDistanceKm,
+      deviationSeconds: hitDeviationSeconds,
+      actualElapsedSeconds: hitElapsedSeconds,
+      idealElapsedSeconds: hitIdealElapsedSeconds,
+      gpsAccuracyM: gps.accuracyM,
+      lat: point?.lat ?? null,
+      lon: point?.lon ?? null
+    }
+
+    setSession((current) => ({
+      ...current,
+      sftcLogs: [...(current.sftcLogs ?? []), log],
+      pendingSftcId: log.id
+    }))
+
+    if ('vibrate' in navigator) {
+      navigator.vibrate?.([60, 40, 60])
+    }
+  }
+
+  const dismissSftc = () => {
+    setSession((current) => ({
+      ...current,
+      pendingSftcId: null
+    }))
   }
 
   return (
@@ -299,14 +401,39 @@ function App() {
           <div className="eyebrow">TSD RALLY V0.4</div>
           <div className="brand">RALLY COMPUTER</div>
         </div>
-        <div className={`gps-pill ${gps.accuracyM !== null && gps.accuracyM <= 15 ? 'good' : gps.accuracyM !== null && gps.accuracyM <= 30 ? 'fair' : 'poor'}`}>
-          GPS {gps.enabled ? (gps.accuracyM === null ? '…' : `${Math.round(gps.accuracyM)}m`) : 'OFF'}
+
+        <div
+          className={`gps-pill ${
+            gps.accuracyM !== null && gps.accuracyM <= 15
+              ? 'good'
+              : gps.accuracyM !== null && gps.accuracyM <= 30
+                ? 'fair'
+                : 'poor'
+          }`}
+        >
+          GPS{' '}
+          {gps.enabled
+            ? gps.accuracyM === null
+              ? '…'
+              : `${Math.round(gps.accuracyM)}m`
+            : 'OFF'}
         </div>
       </header>
 
       <nav className="nav-tabs" aria-label="Main screens">
-        <button className={screen === 'setup' ? 'active' : ''} onClick={() => setScreen('setup')}>SETUP</button>
-        <button className={screen === 'rally' ? 'active' : ''} onClick={() => setScreen('rally')}>RALLY</button>
+        <button
+          className={screen === 'setup' ? 'active' : ''}
+          onClick={() => setScreen('setup')}
+        >
+          SETUP
+        </button>
+
+        <button
+          className={screen === 'rally' ? 'active' : ''}
+          onClick={() => setScreen('rally')}
+        >
+          RALLY
+        </button>
       </nav>
 
       {screen === 'setup' && (
@@ -340,7 +467,9 @@ function App() {
           wakeHeld={wake.held}
           wakeSupported={wake.supported}
           tcLogs={tcLogs}
+          sftcLogs={sftcLogs}
           pendingRestartTcId={session.pendingRestartTcId ?? null}
+          pendingSftcId={session.pendingSftcId ?? null}
           arm={arm}
           startNow={startNow}
           endSession={endSession}
@@ -348,12 +477,17 @@ function App() {
           changeOdo={changeOdo}
           setOdo={setOdo}
           markTc={markTc}
+          markSftc={markSftc}
           applyOfficialRestart={applyOfficialRestart}
           dismissRestartOption={dismissRestartOption}
+          dismissSftc={dismissSftc}
         />
       )}
 
-      <footer className="footer-note">Roadbook distance is the master reference. Correct the odometer whenever you have a trusted distance.</footer>
+      <footer className="footer-note">
+        Roadbook distance is the master reference. Correct the odometer whenever
+        you have a trusted distance.
+      </footer>
     </div>
   )
 }
@@ -367,28 +501,56 @@ type SetupProps = {
   startNow: () => void
 }
 
-function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }: SetupProps) {
+function SetupScreen({
+  settings,
+  setSettings,
+  errors,
+  gpsError,
+  arm,
+  startNow
+}: SetupProps) {
   const [officialKm, setOfficialKm] = useState('5.000')
   const [measuredKm, setMeasuredKm] = useState('5.000')
 
-  const updateSegment = (id: string, patch: Partial<SpeedSector>) => {
+  const updateSegment = (
+    id: string,
+    patch: Partial<SpeedSector>
+  ) => {
     setSettings((current) => ({
       ...current,
-      sectors: current.sectors.map((segment) => segment.id === id ? { ...segment, ...patch } : segment)
+      sectors: current.sectors.map((segment) =>
+        segment.id === id
+          ? { ...segment, ...patch }
+          : segment
+      )
     }))
   }
 
-  const updateNumber = (id: string, field: 'fromKm' | 'toKm' | 'speedKph', value: string) => {
-    updateSegment(id, { [field]: Number(value) })
+  const updateNumber = (
+    id: string,
+    field: 'fromKm' | 'toKm' | 'speedKph',
+    value: string
+  ) => {
+    updateSegment(id, {
+      [field]: Number(value)
+    })
   }
 
   const revealNewEntry = (id: string) => {
-    // Wait for React to render the new row, then keep the navigator at the latest entry.
     window.requestAnimationFrame(() => {
       window.requestAnimationFrame(() => {
         const entry = document.getElementById(`chart-entry-${id}`)
-        entry?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-        const input = entry?.querySelector<HTMLInputElement>('[data-new-entry-focus="true"]')
+
+        entry?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center'
+        })
+
+        const input =
+          entry?.querySelector<HTMLInputElement>(
+            '[data-new-entry-focus="true"]'
+          )
+
         input?.focus()
         input?.select()
       })
@@ -453,37 +615,70 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
   const removeSector = (id: string) => {
     setSettings((current) => ({
       ...current,
-      sectors: current.sectors.filter((segment) => segment.id !== id)
+      sectors: current.sectors.filter(
+        (segment) => segment.id !== id
+      )
     }))
   }
 
-  const setZoneMinutes = (segment: SpeedSector, minutes: number) => {
-    const secondsPart = Math.max(0, segment.zoneDurationSeconds ?? 0) % 60
+  const setZoneMinutes = (
+    segment: SpeedSector,
+    minutes: number
+  ) => {
+    const secondsPart =
+      Math.max(0, segment.zoneDurationSeconds ?? 0) % 60
+
     updateSegment(segment.id, {
-      zoneDurationSeconds: Math.max(0, Math.round(minutes)) * 60 + secondsPart
+      zoneDurationSeconds:
+        Math.max(0, Math.round(minutes)) * 60 +
+        secondsPart
     })
   }
 
-  const setZoneSecondsPart = (segment: SpeedSector, secondsPart: number) => {
-    const minutes = Math.floor(Math.max(0, segment.zoneDurationSeconds ?? 0) / 60)
+  const setZoneSecondsPart = (
+    segment: SpeedSector,
+    secondsPart: number
+  ) => {
+    const minutes = Math.floor(
+      Math.max(0, segment.zoneDurationSeconds ?? 0) / 60
+    )
+
     updateSegment(segment.id, {
-      zoneDurationSeconds: minutes * 60 + Math.max(0, Math.min(59, Math.round(secondsPart)))
+      zoneDurationSeconds:
+        minutes * 60 +
+        Math.max(
+          0,
+          Math.min(59, Math.round(secondsPart))
+        )
     })
   }
 
   const setScratchMinutes = (minutes: number) => {
     const secondsPart = settings.scratchSeconds % 60
+
     setSettings((current) => ({
       ...current,
-      scratchSeconds: Math.max(0, Math.round(minutes)) * 60 + secondsPart
+      scratchSeconds:
+        Math.max(0, Math.round(minutes)) * 60 +
+        secondsPart
     }))
   }
 
-  const setScratchSecondsPart = (secondsPart: number) => {
-    const minutes = Math.floor(settings.scratchSeconds / 60)
+  const setScratchSecondsPart = (
+    secondsPart: number
+  ) => {
+    const minutes = Math.floor(
+      settings.scratchSeconds / 60
+    )
+
     setSettings((current) => ({
       ...current,
-      scratchSeconds: minutes * 60 + Math.max(0, Math.min(59, Math.round(secondsPart)))
+      scratchSeconds:
+        minutes * 60 +
+        Math.max(
+          0,
+          Math.min(59, Math.round(secondsPart))
+        )
     }))
   }
 
@@ -506,6 +701,7 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
 
         <label>
           Official start time
+
           <input
             type="datetime-local"
             step="1"
@@ -520,8 +716,19 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
         </label>
 
         <div className="launch-row">
-          <button className="primary-button" onClick={arm}>ARM START</button>
-          <button className="secondary-button" onClick={startNow}>START NOW</button>
+          <button
+            className="primary-button"
+            onClick={arm}
+          >
+            ARM START
+          </button>
+
+          <button
+            className="secondary-button"
+            onClick={startNow}
+          >
+            START NOW
+          </button>
         </div>
       </section>
 
@@ -531,195 +738,264 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
         </div>
 
         <p className="section-copy">
-          Enter the chart in distance order. Add DZ/FZ only where it appears in the official speed chart.
+          Enter the chart in distance order. Add DZ/FZ only where it appears in
+          the official speed chart.
         </p>
 
-        {sortSectors(settings.sectors).map((segment, index) =>
-          segmentKind(segment) === 'zone' ? (
-            <div
-              className="zone-entry"
-              id={`chart-entry-${segment.id}`}
-              key={segment.id}
-            >
-              <div className="zone-entry-head">
-                <div className="zone-title-row">
-                  <strong>DZ/FZ</strong>
+        {sortSectors(settings.sectors).map(
+          (segment, index) =>
+            segmentKind(segment) === 'zone' ? (
+              <div
+                className="zone-entry"
+                id={`chart-entry-${segment.id}`}
+                key={segment.id}
+              >
+                <div className="zone-entry-head">
+                  <div className="zone-title-row">
+                    <strong>DZ/FZ</strong>
+                  </div>
+
+                  <button
+                    className="delete-text-button"
+                    onClick={() =>
+                      removeSector(segment.id)
+                    }
+                  >
+                    REMOVE
+                  </button>
                 </div>
 
-                <button
-                  className="delete-text-button"
-                  onClick={() => removeSector(segment.id)}
-                >
-                  REMOVE
-                </button>
-              </div>
-
-              <div className="zone-distance-grid">
-                <label>
-                  FROM km
-                  <input
-                    inputMode="decimal"
-                    type="number"
-                    step="0.001"
-                    value={segment.fromKm}
-                    onChange={(e) =>
-                      updateNumber(segment.id, 'fromKm', e.target.value)
-                    }
-                  />
-                </label>
-
-                <label>
-                  TO km
-                  <input
-                    data-new-entry-focus="true"
-                    inputMode="decimal"
-                    type="number"
-                    step="0.001"
-                    value={segment.toKm}
-                    onChange={(e) =>
-                      updateNumber(segment.id, 'toKm', e.target.value)
-                    }
-                  />
-                </label>
-              </div>
-
-              <div className="zone-basis-toggle">
-                <button
-                  className={zoneBasis(segment) === 'speed' ? 'active' : ''}
-                  onClick={() =>
-                    updateSegment(segment.id, { zoneBasis: 'speed' })
-                  }
-                >
-                  SPEED
-                </button>
-
-                <button
-                  className={zoneBasis(segment) === 'time' ? 'active' : ''}
-                  onClick={() =>
-                    updateSegment(segment.id, { zoneBasis: 'time' })
-                  }
-                >
-                  TIME
-                </button>
-              </div>
-
-              {zoneBasis(segment) === 'speed' ? (
-                <label className="zone-value-field">
-                  ZONE SPEED km/h
-                  <input
-                    inputMode="decimal"
-                    type="number"
-                    step="0.1"
-                    value={segment.speedKph}
-                    onChange={(e) =>
-                      updateNumber(segment.id, 'speedKph', e.target.value)
-                    }
-                  />
-                </label>
-              ) : (
-                <div className="zone-time-fields">
+                <div className="zone-distance-grid">
                   <label>
-                    MIN
+                    FROM km
+
                     <input
+                      inputMode="decimal"
                       type="number"
-                      min="0"
-                      step="1"
-                      value={Math.floor(
-                        Math.max(0, segment.zoneDurationSeconds ?? 0) / 60
-                      )}
+                      step="0.001"
+                      value={segment.fromKm}
                       onChange={(e) =>
-                        setZoneMinutes(segment, Number(e.target.value))
+                        updateNumber(
+                          segment.id,
+                          'fromKm',
+                          e.target.value
+                        )
                       }
                     />
                   </label>
 
                   <label>
-                    SEC
+                    TO km
+
                     <input
+                      data-new-entry-focus="true"
+                      inputMode="decimal"
                       type="number"
-                      min="0"
-                      max="59"
-                      step="1"
-                      value={
-                        Math.max(0, segment.zoneDurationSeconds ?? 0) % 60
-                      }
+                      step="0.001"
+                      value={segment.toKm}
                       onChange={(e) =>
-                        setZoneSecondsPart(segment, Number(e.target.value))
+                        updateNumber(
+                          segment.id,
+                          'toKm',
+                          e.target.value
+                        )
                       }
                     />
                   </label>
                 </div>
-              )}
-            </div>
-          ) : (
-            <div
-              className="speed-entry"
-              id={`chart-entry-${segment.id}`}
-              key={segment.id}
-            >
-              <div className="speed-entry-label">
-                SPEED {String(index + 1).padStart(2, '0')}
+
+                <div className="zone-basis-toggle">
+                  <button
+                    className={
+                      zoneBasis(segment) === 'speed'
+                        ? 'active'
+                        : ''
+                    }
+                    onClick={() =>
+                      updateSegment(segment.id, {
+                        zoneBasis: 'speed'
+                      })
+                    }
+                  >
+                    SPEED
+                  </button>
+
+                  <button
+                    className={
+                      zoneBasis(segment) === 'time'
+                        ? 'active'
+                        : ''
+                    }
+                    onClick={() =>
+                      updateSegment(segment.id, {
+                        zoneBasis: 'time'
+                      })
+                    }
+                  >
+                    TIME
+                  </button>
+                </div>
+
+                {zoneBasis(segment) === 'speed' ? (
+                  <label className="zone-value-field">
+                    ZONE SPEED km/h
+
+                    <input
+                      inputMode="decimal"
+                      type="number"
+                      step="0.1"
+                      value={segment.speedKph}
+                      onChange={(e) =>
+                        updateNumber(
+                          segment.id,
+                          'speedKph',
+                          e.target.value
+                        )
+                      }
+                    />
+                  </label>
+                ) : (
+                  <div className="zone-time-fields">
+                    <label>
+                      MIN
+
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={Math.floor(
+                          Math.max(
+                            0,
+                            segment.zoneDurationSeconds ?? 0
+                          ) / 60
+                        )}
+                        onChange={(e) =>
+                          setZoneMinutes(
+                            segment,
+                            Number(e.target.value)
+                          )
+                        }
+                      />
+                    </label>
+
+                    <label>
+                      SEC
+
+                      <input
+                        type="number"
+                        min="0"
+                        max="59"
+                        step="1"
+                        value={
+                          Math.max(
+                            0,
+                            segment.zoneDurationSeconds ?? 0
+                          ) % 60
+                        }
+                        onChange={(e) =>
+                          setZoneSecondsPart(
+                            segment,
+                            Number(e.target.value)
+                          )
+                        }
+                      />
+                    </label>
+                  </div>
+                )}
               </div>
+            ) : (
+              <div
+                className="speed-entry"
+                id={`chart-entry-${segment.id}`}
+                key={segment.id}
+              >
+                <div className="speed-entry-label">
+                  SPEED{' '}
+                  {String(index + 1).padStart(2, '0')}
+                </div>
 
-              <div className="sector-row">
-                <label>
-                  FROM km
-                  <input
-                    inputMode="decimal"
-                    type="number"
-                    step="0.001"
-                    value={segment.fromKm}
-                    onChange={(e) =>
-                      updateNumber(segment.id, 'fromKm', e.target.value)
+                <div className="sector-row">
+                  <label>
+                    FROM km
+
+                    <input
+                      inputMode="decimal"
+                      type="number"
+                      step="0.001"
+                      value={segment.fromKm}
+                      onChange={(e) =>
+                        updateNumber(
+                          segment.id,
+                          'fromKm',
+                          e.target.value
+                        )
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    TO km
+
+                    <input
+                      data-new-entry-focus="true"
+                      inputMode="decimal"
+                      type="number"
+                      step="0.001"
+                      value={segment.toKm}
+                      onChange={(e) =>
+                        updateNumber(
+                          segment.id,
+                          'toKm',
+                          e.target.value
+                        )
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    AVG km/h
+
+                    <input
+                      inputMode="decimal"
+                      type="number"
+                      step="0.1"
+                      value={segment.speedKph}
+                      onChange={(e) =>
+                        updateNumber(
+                          segment.id,
+                          'speedKph',
+                          e.target.value
+                        )
+                      }
+                    />
+                  </label>
+
+                  <button
+                    className="delete-button"
+                    aria-label="Delete speed entry"
+                    onClick={() =>
+                      removeSector(segment.id)
                     }
-                  />
-                </label>
-
-                <label>
-                  TO km
-                  <input
-                    data-new-entry-focus="true"
-                    inputMode="decimal"
-                    type="number"
-                    step="0.001"
-                    value={segment.toKm}
-                    onChange={(e) =>
-                      updateNumber(segment.id, 'toKm', e.target.value)
-                    }
-                  />
-                </label>
-
-                <label>
-                  AVG km/h
-                  <input
-                    inputMode="decimal"
-                    type="number"
-                    step="0.1"
-                    value={segment.speedKph}
-                    onChange={(e) =>
-                      updateNumber(segment.id, 'speedKph', e.target.value)
-                    }
-                  />
-                </label>
-
-                <button
-                  className="delete-button"
-                  aria-label="Delete speed entry"
-                  onClick={() => removeSector(segment.id)}
-                >
-                  ×
-                </button>
+                  >
+                    ×
+                  </button>
+                </div>
               </div>
-            </div>
-          )
+            )
         )}
 
         <div className="chart-add-buttons">
-          <button className="small-button" onClick={addSector}>
+          <button
+            className="small-button"
+            onClick={addSector}
+          >
             + SPEED
           </button>
 
-          <button className="small-button zone-add" onClick={addZone}>
+          <button
+            className="small-button zone-add"
+            onClick={addZone}
+          >
             + DZ/FZ
           </button>
         </div>
@@ -739,17 +1015,25 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
         <div className="scratch-fields">
           <label>
             MIN
+
             <input
               type="number"
               min="0"
               step="1"
-              value={Math.floor(settings.scratchSeconds / 60)}
-              onChange={(e) => setScratchMinutes(Number(e.target.value))}
+              value={Math.floor(
+                settings.scratchSeconds / 60
+              )}
+              onChange={(e) =>
+                setScratchMinutes(
+                  Number(e.target.value)
+                )
+              }
             />
           </label>
 
           <label>
             SEC
+
             <input
               type="number"
               min="0"
@@ -757,7 +1041,9 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
               step="1"
               value={settings.scratchSeconds % 60}
               onChange={(e) =>
-                setScratchSecondsPart(Number(e.target.value))
+                setScratchSecondsPart(
+                  Number(e.target.value)
+                )
               }
             />
           </label>
@@ -772,21 +1058,27 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
         <div className="two-col">
           <label>
             Official km
+
             <input
               type="number"
               step="0.001"
               value={officialKm}
-              onChange={(e) => setOfficialKm(e.target.value)}
+              onChange={(e) =>
+                setOfficialKm(e.target.value)
+              }
             />
           </label>
 
           <label>
             GPS measured km
+
             <input
               type="number"
               step="0.001"
               value={measuredKm}
-              onChange={(e) => setMeasuredKm(e.target.value)}
+              onChange={(e) =>
+                setMeasuredKm(e.target.value)
+              }
             />
           </label>
         </div>
@@ -799,14 +1091,17 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
         </button>
 
         <div className="factor-line">
-          FACTOR <strong>{settings.calibrationFactor.toFixed(6)}</strong>
+          FACTOR{' '}
+          <strong>
+            {settings.calibrationFactor.toFixed(6)}
+          </strong>
         </div>
       </details>
 
       {gpsError && (
         <div className="error-box">
-          GPS: {gpsError}. Location starts automatically; allow precise
-          location in the browser/app settings.
+          GPS: {gpsError}. Location starts automatically; allow precise location
+          in the browser/app settings.
         </div>
       )}
     </main>
@@ -832,7 +1127,9 @@ type RallyScreenProps = {
   wakeHeld: boolean
   wakeSupported: boolean
   tcLogs: TcLog[]
+  sftcLogs: SftcLog[]
   pendingRestartTcId: string | null
+  pendingSftcId: string | null
   arm: () => void
   startNow: () => void
   endSession: () => void
@@ -840,8 +1137,13 @@ type RallyScreenProps = {
   changeOdo: (deltaKm: number) => void
   setOdo: () => void
   markTc: () => void
-  applyOfficialRestart: (tcId: string, clockValue: string) => void
+  markSftc: () => void
+  applyOfficialRestart: (
+    tcId: string,
+    clockValue: string
+  ) => void
   dismissRestartOption: () => void
+  dismissSftc: () => void
 }
 
 function timingState(seconds: number) {
@@ -881,7 +1183,9 @@ function RallyScreen(props: RallyScreenProps) {
     wakeHeld,
     wakeSupported,
     tcLogs,
+    sftcLogs,
     pendingRestartTcId,
+    pendingSftcId,
     arm,
     startNow,
     endSession,
@@ -889,23 +1193,38 @@ function RallyScreen(props: RallyScreenProps) {
     changeOdo,
     setOdo,
     markTc,
+    markSftc,
     applyOfficialRestart,
-    dismissRestartOption
+    dismissRestartOption,
+    dismissSftc
   } = props
 
   const activeTcLog = pendingRestartTcId
-    ? tcLogs.find((log) => log.id === pendingRestartTcId) ?? null
+    ? tcLogs.find(
+        (log) => log.id === pendingRestartTcId
+      ) ?? null
+    : null
+
+  const activeSftcLog = pendingSftcId
+    ? sftcLogs.find(
+        (log) => log.id === pendingSftcId
+      ) ?? null
     : null
 
   const [restartTime, setRestartTime] = useState('')
 
   useEffect(() => {
-    if (activeTcLog) setRestartTime(timeInputValue())
+    if (activeTcLog) {
+      setRestartTime(timeInputValue())
+    }
   }, [activeTcLog?.id])
 
   const waitingSeconds =
     status === 'armed' && startMs
-      ? Math.max(0, (startMs - nowMs) / 1000)
+      ? Math.max(
+          0,
+          (startMs - nowMs) / 1000
+        )
       : 0
 
   const timingClass =
@@ -918,25 +1237,37 @@ function RallyScreen(props: RallyScreenProps) {
   const stateLabel = timingState(deltaSeconds)
 
   const inZone =
-    currentSegment !== null && segmentKind(currentSegment) === 'zone'
+    currentSegment !== null &&
+    segmentKind(currentSegment) === 'zone'
 
-  const currentZoneBasis = currentSegment
-    ? zoneBasis(currentSegment)
-    : 'speed'
+  const currentZoneBasis =
+    currentSegment
+      ? zoneBasis(currentSegment)
+      : 'speed'
 
   if (status === 'idle') {
     return (
       <main className="content rally-empty">
         <div className="empty-card">
-          <div className="eyebrow">RALLY COMPUTER READY</div>
+          <div className="eyebrow">
+            RALLY COMPUTER READY
+          </div>
 
-          <h1>Set the speed chart, then arm the start.</h1>
+          <h1>
+            Set the speed chart, then arm the start.
+          </h1>
 
-          <button className="primary-button" onClick={arm}>
+          <button
+            className="primary-button"
+            onClick={arm}
+          >
             ARM START
           </button>
 
-          <button className="secondary-button" onClick={startNow}>
+          <button
+            className="secondary-button"
+            onClick={startNow}
+          >
             START NOW
           </button>
         </div>
@@ -948,37 +1279,55 @@ function RallyScreen(props: RallyScreenProps) {
     return (
       <main className="content session-log-screen">
         <section className="panel session-summary">
-          <div className="eyebrow">SESSION COMPLETE</div>
+          <div className="eyebrow">
+            SESSION COMPLETE
+          </div>
 
           <h1>SESSION LOG</h1>
 
           <div className="summary-grid">
             <div>
               <span>DISTANCE</span>
-              <strong>{rallyDistanceKm.toFixed(3)}</strong>
+              <strong>
+                {rallyDistanceKm.toFixed(3)}
+              </strong>
               <small>km</small>
             </div>
 
             <div>
               <span>ELAPSED</span>
-              <strong>{formatElapsed(actualElapsedSeconds)}</strong>
+              <strong>
+                {formatElapsed(
+                  actualElapsedSeconds
+                )}
+              </strong>
             </div>
 
             <div>
-              <span>TCs</span>
-              <strong>{tcLogs.length}</strong>
+              <span>CONTROLS</span>
+              <strong>
+                {tcLogs.length} / {sftcLogs.length}
+              </strong>
+              <small>TC / SFTC</small>
             </div>
 
             <div>
               <span>FINAL</span>
-              <strong>{formatDeviation(deltaSeconds)}</strong>
+              <strong>
+                {formatDeviation(deltaSeconds)}
+              </strong>
               <small>{stateLabel}</small>
             </div>
           </div>
 
           <div className="session-times">
-            <span>START {clockTime(startMs)}</span>
-            <span>END {clockTime(stopMs)}</span>
+            <span>
+              START {clockTime(startMs)}
+            </span>
+
+            <span>
+              END {clockTime(stopMs)}
+            </span>
           </div>
         </section>
 
@@ -991,38 +1340,59 @@ function RallyScreen(props: RallyScreenProps) {
             </p>
           ) : (
             tcLogs.map((log) => (
-              <div className="tc-log-row" key={log.id}>
+              <div
+                className="tc-log-row"
+                key={log.id}
+              >
                 <div className="tc-log-number">
-                  TC {String(log.number).padStart(2, '0')}
+                  TC{' '}
+                  {String(log.number).padStart(
+                    2,
+                    '0'
+                  )}
                 </div>
 
                 <div>
                   <span>ODO</span>
-                  <strong>{log.odoKm.toFixed(3)} km</strong>
+                  <strong>
+                    {log.odoKm.toFixed(3)} km
+                  </strong>
                 </div>
 
                 <div>
                   <span>TIME</span>
-                  <strong>{clockTime(log.hitMs)}</strong>
+                  <strong>
+                    {clockTime(log.hitMs)}
+                  </strong>
                 </div>
 
                 <div>
                   <span>STATUS</span>
                   <strong>
-                    {formatDeviation(log.deviationSeconds)}{' '}
-                    {timingState(log.deviationSeconds)}
+                    {formatDeviation(
+                      log.deviationSeconds
+                    )}{' '}
+                    {timingState(
+                      log.deviationSeconds
+                    )}
                   </strong>
                 </div>
 
                 <div>
                   <span>
-                    {log.officialRestartMs ? 'RESTART' : 'SCRATCH'}
+                    {log.officialRestartMs
+                      ? 'RESTART'
+                      : 'SCRATCH'}
                   </span>
 
                   <strong>
                     {log.officialRestartMs
-                      ? `${clockTime(log.officialRestartMs)} · SCRATCH OVERRIDDEN`
-                      : formatDuration(log.scratchSeconds)}
+                      ? `${clockTime(
+                          log.officialRestartMs
+                        )} · SCRATCH OVERRIDDEN`
+                      : formatDuration(
+                          log.scratchSeconds
+                        )}
                   </strong>
                 </div>
 
@@ -1031,7 +1401,78 @@ function RallyScreen(props: RallyScreenProps) {
                   <strong>
                     {log.gpsAccuracyM === null
                       ? '—'
-                      : `${Math.round(log.gpsAccuracyM)} m`}
+                      : `${Math.round(
+                          log.gpsAccuracyM
+                        )} m`}
+                  </strong>
+                </div>
+              </div>
+            ))
+          )}
+        </section>
+
+        <section className="panel tc-log-panel">
+          <h2>SELF TIME CONTROLS</h2>
+
+          {sftcLogs.length === 0 ? (
+            <p className="empty-log">
+              No SFTCs were marked in this session.
+            </p>
+          ) : (
+            sftcLogs.map((log) => (
+              <div
+                className="tc-log-row"
+                key={log.id}
+              >
+                <div className="tc-log-number">
+                  SFTC{' '}
+                  {String(log.number).padStart(
+                    2,
+                    '0'
+                  )}
+                </div>
+
+                <div>
+                  <span>ODO</span>
+                  <strong>
+                    {log.odoKm.toFixed(3)} km
+                  </strong>
+                </div>
+
+                <div>
+                  <span>WRITE</span>
+                  <strong>
+                    {clockTime(log.cardTimeMs)}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>ACTUAL</span>
+                  <strong>
+                    {clockTime(log.hitMs)}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>STATUS</span>
+                  <strong>
+                    {formatDeviation(
+                      log.deviationSeconds
+                    )}{' '}
+                    {timingState(
+                      log.deviationSeconds
+                    )}
+                  </strong>
+                </div>
+
+                <div>
+                  <span>GPS</span>
+                  <strong>
+                    {log.gpsAccuracyM === null
+                      ? '—'
+                      : `${Math.round(
+                          log.gpsAccuracyM
+                        )} m`}
                   </strong>
                 </div>
               </div>
@@ -1055,7 +1496,9 @@ function RallyScreen(props: RallyScreenProps) {
         ? `${nextChange.nextZoneType} ${formatDuration(
             nextChange.nextZoneDurationSeconds ?? 0
           )}`
-        : `${nextChange.nextZoneType} ${nextChange.nextSpeedKph.toFixed(1)}`
+        : `${nextChange.nextZoneType} ${nextChange.nextSpeedKph.toFixed(
+            1
+          )}`
       : nextChange.nextSpeedKph.toFixed(1)
     : null
 
@@ -1063,7 +1506,9 @@ function RallyScreen(props: RallyScreenProps) {
     <main className="content rally-screen">
       {status === 'armed' ? (
         <section className="armed-card">
-          <div className="eyebrow">ARMED</div>
+          <div className="eyebrow">
+            ARMED
+          </div>
 
           <div className="countdown">
             {waitingSeconds.toFixed(1)}
@@ -1078,7 +1523,10 @@ function RallyScreen(props: RallyScreenProps) {
           </div>
 
           <div className="rally-flags">
-            <span>GPS {gpsEnabled ? 'LIVE' : 'OFF'}</span>
+            <span>
+              GPS {gpsEnabled ? 'LIVE' : 'OFF'}
+            </span>
+
             <span>
               WAKE{' '}
               {wakeHeld
@@ -1091,7 +1539,9 @@ function RallyScreen(props: RallyScreenProps) {
         </section>
       ) : (
         <>
-          <section className={`delta-card ${timingClass}`}>
+          <section
+            className={`delta-card ${timingClass}`}
+          >
             <div className="delta-number">
               {formatDeviation(deltaSeconds)}
             </div>
@@ -1113,15 +1563,19 @@ function RallyScreen(props: RallyScreenProps) {
                   : 'TARGET'}
               </span>
 
-              {inZone && currentZoneBasis === 'time' ? (
+              {inZone &&
+              currentZoneBasis === 'time' ? (
                 <strong className="time-target">
                   {formatDuration(
-                    currentSegment?.zoneDurationSeconds ?? 0
+                    currentSegment?.zoneDurationSeconds ??
+                      0
                   )}
                 </strong>
               ) : (
                 <>
-                  <strong>{targetSpeed.toFixed(1)}</strong>
+                  <strong>
+                    {targetSpeed.toFixed(1)}
+                  </strong>
                   <small>km/h</small>
                 </>
               )}
@@ -1140,7 +1594,11 @@ function RallyScreen(props: RallyScreenProps) {
 
           <section className="trip-card">
             <span>RALLY ODOMETER</span>
-            <strong>{rallyDistanceKm.toFixed(3)}</strong>
+
+            <strong>
+              {rallyDistanceKm.toFixed(3)}
+            </strong>
+
             <small>km</small>
           </section>
 
@@ -1150,46 +1608,168 @@ function RallyScreen(props: RallyScreenProps) {
             {nextChange ? (
               <div className="next-main">
                 <strong>
-                  {nextChange.distanceKm.toFixed(3)} km
+                  {nextChange.distanceKm.toFixed(
+                    3
+                  )}{' '}
+                  km
                 </strong>
 
                 <b>→ {nextLabel}</b>
               </div>
             ) : (
               <div className="next-main">
-                <strong>END OF CHART</strong>
-                <b>{remainingKm.toFixed(3)} km</b>
+                <strong>
+                  END OF CHART
+                </strong>
+
+                <b>
+                  {remainingKm.toFixed(3)} km
+                </b>
               </div>
             )}
           </section>
 
-          <button
-            className="tc-button"
-            onClick={markTc}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: '10px'
+            }}
           >
-            TC
-          </button>
+            <button
+              className="tc-button"
+              style={{
+                width: '100%',
+                margin: 0
+              }}
+              onClick={markTc}
+            >
+              TC
+            </button>
+
+            <button
+              className="tc-button"
+              style={{
+                width: '100%',
+                margin: 0
+              }}
+              onClick={markSftc}
+              disabled={Boolean(activeSftcLog)}
+            >
+              SFTC
+            </button>
+          </div>
+
+          {activeSftcLog && (
+            <section
+              className="panel"
+              style={{
+                textAlign: 'center'
+              }}
+            >
+              <div className="eyebrow">
+                SFTC{' '}
+                {String(
+                  activeSftcLog.number
+                ).padStart(2, '0')}{' '}
+                RECORDED
+              </div>
+
+              <h2
+                style={{
+                  marginBottom: '8px'
+                }}
+              >
+                WRITE
+              </h2>
+
+              <div
+                style={{
+                  fontSize: '3.2rem',
+                  lineHeight: 1,
+                  fontWeight: 900,
+                  letterSpacing: '0.02em',
+                  margin: '10px 0 18px'
+                }}
+              >
+                {clockTime(
+                  activeSftcLog.cardTimeMs
+                )}
+              </div>
+
+              <div
+                className="session-times"
+                style={{
+                  justifyContent: 'center',
+                  gap: '16px',
+                  flexWrap: 'wrap'
+                }}
+              >
+                <span>
+                  ODO{' '}
+                  {activeSftcLog.odoKm.toFixed(
+                    3
+                  )}{' '}
+                  km
+                </span>
+
+                <span>
+                  ACTUAL{' '}
+                  {clockTime(
+                    activeSftcLog.hitMs
+                  )}
+                </span>
+
+                <span>
+                  {formatDeviation(
+                    activeSftcLog.deviationSeconds
+                  )}{' '}
+                  {timingState(
+                    activeSftcLog.deviationSeconds
+                  )}
+                </span>
+              </div>
+
+              <button
+                className="primary-button full-button"
+                style={{
+                  marginTop: '16px'
+                }}
+                onClick={dismissSftc}
+              >
+                OK
+              </button>
+            </section>
+          )}
 
           {activeTcLog && (
             <section className="panel">
               <div className="eyebrow">
-                TC {String(activeTcLog.number).padStart(2, '0')} RECORDED
+                TC{' '}
+                {String(
+                  activeTcLog.number
+                ).padStart(2, '0')}{' '}
+                RECORDED
               </div>
 
               <h2>NEW START TIME?</h2>
 
               <p className="section-copy">
-                Normal scratch is active. Use this only if the marshal gives you an official new start time.
+                Normal scratch is active. Use this only if the marshal gives you
+                an official new start time.
               </p>
 
               <label>
                 OFFICIAL RESTART TIME
+
                 <input
                   type="time"
                   step="1"
                   value={restartTime}
                   onChange={(e) =>
-                    setRestartTime(e.target.value)
+                    setRestartTime(
+                      e.target.value
+                    )
                   }
                 />
               </label>
@@ -1209,7 +1789,9 @@ function RallyScreen(props: RallyScreenProps) {
 
                 <button
                   className="secondary-button"
-                  onClick={dismissRestartOption}
+                  onClick={
+                    dismissRestartOption
+                  }
                 >
                   DISMISS
                 </button>
@@ -1218,7 +1800,11 @@ function RallyScreen(props: RallyScreenProps) {
           )}
 
           <section className="odo-controls">
-            <button onClick={() => changeOdo(-0.01)}>
+            <button
+              onClick={() =>
+                changeOdo(-0.01)
+              }
+            >
               −10 m
             </button>
 
@@ -1229,7 +1815,11 @@ function RallyScreen(props: RallyScreenProps) {
               SET ODO
             </button>
 
-            <button onClick={() => changeOdo(0.01)}>
+            <button
+              onClick={() =>
+                changeOdo(0.01)
+              }
+            >
               +10 m
             </button>
           </section>
@@ -1237,15 +1827,21 @@ function RallyScreen(props: RallyScreenProps) {
           <section className="timing-strip">
             <div>
               <span>ACTUAL</span>
+
               <strong>
-                {formatElapsed(actualElapsedSeconds)}
+                {formatElapsed(
+                  actualElapsedSeconds
+                )}
               </strong>
             </div>
 
             <div>
               <span>IDEAL</span>
+
               <strong>
-                {formatElapsed(idealElapsedSeconds)}
+                {formatElapsed(
+                  idealElapsedSeconds
+                )}
               </strong>
             </div>
           </section>
