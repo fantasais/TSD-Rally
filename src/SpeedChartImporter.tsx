@@ -553,7 +553,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
   }
 
   return (
-    <div style={{ border: '1px solid #353535', borderRadius: 12, padding: 14, marginBottom: 18, background: '#0b0b0b' }}>
+    <div className="ocr-importer">
       <input
         ref={inputRef}
         type="file"
@@ -566,96 +566,151 @@ export default function SpeedChartImporter({ onLoad }: Props) {
         }}
       />
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+      <div className="ocr-import-head">
         <div>
-          <strong style={{ display: 'block', fontSize: 14 }}>LOCAL PHOTO IMPORT</strong>
-          <span style={{ fontSize: 12, color: '#aaa' }}>Fill the photo with the table. OCR runs on this phone; always review before loading.</span>
+          <strong>LOCAL PHOTO IMPORT</strong>
+          <span>Fill the photo with the table. OCR runs on this phone; always review before loading.</span>
         </div>
         <button className="small-button" disabled={busy} onClick={() => inputRef.current?.click()}>
           {busy ? 'READING…' : 'UPLOAD PHOTO'}
         </button>
       </div>
 
-      <div style={{ marginTop: 8, fontSize: 11, color: '#777' }}>
+      <div className="ocr-import-note">
         No API key or per-scan charge. The first OCR use may need data once to initialise the local engine.
       </div>
 
-      {fileName && <div style={{ marginTop: 8, fontSize: 11, color: '#777' }}>{fileName}</div>}
+      {fileName && <div className="ocr-file-name">{fileName}</div>}
 
       {busy && (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ height: 5, borderRadius: 999, background: '#252525', overflow: 'hidden' }}>
-            <div style={{ width: `${Math.max(3, Math.round(progress * 100))}%`, height: '100%', background: '#fff', transition: 'width 180ms ease' }} />
+        <div className="ocr-progress-wrap">
+          <div className="ocr-progress-track">
+            <div className="ocr-progress-fill" style={{ width: `${Math.max(3, Math.round(progress * 100))}%` }} />
           </div>
-          <div style={{ marginTop: 6, fontSize: 11, color: '#aaa' }}>{progressText(status, progress)}</div>
+          <div className="ocr-progress-text">{progressText(status, progress)}</div>
         </div>
       )}
 
-      {error && <div className="error-box" style={{ marginTop: 12 }}>{error}</div>}
+      {error && <div className="error-box ocr-error">{error}</div>}
 
       {rows && (
-        <div style={{ marginTop: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+        <div className="ocr-review">
+          <div className="ocr-review-summary">
             <strong>{rows.length} ENTRIES FOUND</strong>
-            <span style={{ fontSize: 11, color: needsCheckCount ? '#ffbf3f' : '#999' }}>
+            <span className={needsCheckCount ? 'needs-check' : ''}>
               {needsCheckCount ? `${needsCheckCount} NEED CHECK` : 'REVIEW BEFORE LOADING'}
             </span>
           </div>
 
-          <div style={{ display: 'grid', gap: 8 }}>
-            {rows.map((row, index) => {
-              const minutes = Math.floor(Math.max(0, row.durationSeconds) / 60)
-              const seconds = Math.max(0, row.durationSeconds) % 60
-              return (
-                <div key={row.id} style={{ border: `1px solid ${row.confidence === 'low' ? '#a66a00' : row.confidence === 'medium' ? '#66551f' : '#282828'}`, borderRadius: 9, padding: 9 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 7 }}>
-                    <strong style={{ fontSize: 12 }}>{String(index + 1).padStart(2, '0')}</strong>
-                    <button className="delete-text-button" onClick={() => remove(row.id)}>REMOVE</button>
-                  </div>
+          <div className="ocr-table-wrap">
+            <div className="ocr-table-head" aria-hidden="true">
+              <span>#</span>
+              <span>FROM</span>
+              <span>TO</span>
+              <span>SPEED / TIME</span>
+              <span>TYPE</span>
+              <span />
+            </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 }}>
-                    <label>START ODO<input inputMode="decimal" type="number" step="0.001" value={row.fromKm} onChange={(e) => update(row.id, { fromKm: Number(e.target.value), confidence: 'high' })} /></label>
-                    <label>END ODO<input inputMode="decimal" type="number" step="0.001" value={row.toKm} onChange={(e) => update(row.id, { toKm: Number(e.target.value), confidence: 'high' })} /></label>
-                  </div>
+            <div className="ocr-table-body">
+              {rows.map((row, index) => {
+                const minutes = Math.floor(Math.max(0, row.durationSeconds) / 60)
+                const seconds = Math.max(0, row.durationSeconds) % 60
+                const needsCheck = row.confidence !== 'high'
 
-                  <label style={{ marginTop: 7 }}>TYPE
-                    <select value={row.mode} onChange={(e) => update(row.id, { mode: e.target.value as LocalOcrMode, confidence: 'high' })}>
+                return (
+                  <div
+                    key={row.id}
+                    className={`ocr-review-row ${needsCheck ? 'needs-check' : ''} ${row.mode !== 'speed' ? 'zone-row' : ''}`}
+                    title={needsCheck ? (row.note || 'Check against the sheet') : undefined}
+                  >
+                    <div className="ocr-row-number">
+                      <strong>{String(index + 1).padStart(2, '0')}</strong>
+                      {needsCheck && <span>CHECK</span>}
+                    </div>
+
+                    <input
+                      aria-label={`Row ${index + 1} start ODO`}
+                      inputMode="decimal"
+                      type="number"
+                      step="0.001"
+                      value={row.fromKm}
+                      onChange={(e) => update(row.id, { fromKm: Number(e.target.value), confidence: 'high' })}
+                    />
+
+                    <input
+                      aria-label={`Row ${index + 1} end ODO`}
+                      inputMode="decimal"
+                      type="number"
+                      step="0.001"
+                      value={row.toKm}
+                      onChange={(e) => update(row.id, { toKm: Number(e.target.value), confidence: 'high' })}
+                    />
+
+                    {row.mode === 'zone_time' ? (
+                      <div className="ocr-time-value" aria-label={`Row ${index + 1} zone time`}>
+                        <input
+                          aria-label={`Row ${index + 1} minutes`}
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={minutes}
+                          onChange={(e) => update(row.id, {
+                            durationSeconds: Math.max(0, Number(e.target.value)) * 60 + seconds,
+                            confidence: 'high'
+                          })}
+                        />
+                        <span>:</span>
+                        <input
+                          aria-label={`Row ${index + 1} seconds`}
+                          type="number"
+                          min="0"
+                          max="59"
+                          step="1"
+                          value={seconds}
+                          onChange={(e) => update(row.id, {
+                            durationSeconds: minutes * 60 + Math.max(0, Math.min(59, Number(e.target.value))),
+                            confidence: 'high'
+                          })}
+                        />
+                      </div>
+                    ) : (
+                      <input
+                        aria-label={`Row ${index + 1} ${row.mode === 'speed' ? 'average speed' : 'zone speed'}`}
+                        inputMode="decimal"
+                        type="number"
+                        step="0.1"
+                        value={row.speedKph}
+                        onChange={(e) => update(row.id, { speedKph: Number(e.target.value), confidence: 'high' })}
+                      />
+                    )}
+
+                    <select
+                      aria-label={`Row ${index + 1} type`}
+                      value={row.mode}
+                      onChange={(e) => update(row.id, { mode: e.target.value as LocalOcrMode, confidence: 'high' })}
+                    >
                       <option value="speed">SPEED</option>
-                      <option value="zone_speed">DZ/FZ · SPEED</option>
-                      <option value="zone_time">DZ/FZ · TIME</option>
+                      <option value="zone_speed">DZ/FZ SPD</option>
+                      <option value="zone_time">DZ/FZ TIME</option>
                     </select>
-                  </label>
 
-                  {row.mode === 'zone_time' ? (
-                    <div className="zone-time-fields" style={{ marginTop: 7 }}>
-                      <label>MIN<input type="number" min="0" step="1" value={minutes} onChange={(e) => update(row.id, { durationSeconds: Math.max(0, Number(e.target.value)) * 60 + seconds, confidence: 'high' })} /></label>
-                      <label>SEC<input type="number" min="0" max="59" step="1" value={seconds} onChange={(e) => update(row.id, { durationSeconds: minutes * 60 + Math.max(0, Math.min(59, Number(e.target.value))), confidence: 'high' })} /></label>
-                    </div>
-                  ) : (
-                    <label style={{ marginTop: 7 }}>{row.mode === 'speed' ? 'AVG km/h' : 'ZONE SPEED km/h'}
-                      <input inputMode="decimal" type="number" step="0.1" value={row.speedKph} onChange={(e) => update(row.id, { speedKph: Number(e.target.value), confidence: 'high' })} />
-                    </label>
-                  )}
-
-                  {(row.confidence !== 'high' || row.note) && (
-                    <div style={{ marginTop: 6, fontSize: 11, color: row.confidence === 'low' ? '#ffbf3f' : '#888' }}>
-                      {row.confidence.toUpperCase()} · {row.note || 'Check against sheet'}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
+                    <button className="ocr-remove-button" aria-label={`Remove row ${index + 1}`} onClick={() => remove(row.id)}>×</button>
+                  </div>
+                )
+              })}
+            </div>
           </div>
 
-          <button className="secondary-button full-button" style={{ marginTop: 10 }} onClick={addRow}>+ ROW</button>
+          <button className="secondary-button full-button ocr-add-row" onClick={addRow}>+ ROW</button>
 
           {issues.length > 0 && (
-            <div className="error-box" style={{ marginTop: 12 }}>
+            <div className="error-box ocr-issues">
               {issues.map((issue) => <div key={issue}>{issue}</div>)}
             </div>
           )}
 
-          <div className="launch-row" style={{ marginTop: 12 }}>
+          <div className="launch-row ocr-review-actions">
             <button
               className="primary-button"
               disabled={issues.length > 0}
