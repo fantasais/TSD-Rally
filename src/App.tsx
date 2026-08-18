@@ -964,7 +964,7 @@ function RallyScreen(props: RallyScreenProps) {
           </section>
 
           <section className="timing-strip">
-            <div><span>ACTUAL TIME</span><strong>{clockTime(status === 'stopped' ? stopMs : nowMs)}</strong></div>
+            <div><span>ACTUAL TIME</span><strong>{clockTime(nowMs)}</strong></div>
             <div><span>IDEAL TIME</span><strong>{startMs === null ? '—' : clockTime(startMs + idealElapsedSeconds * 1000)}</strong></div>
           </section>
         </>
