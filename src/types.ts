@@ -22,6 +22,8 @@ export type RallySettings = {
 
 export type RallyStatus = 'idle' | 'armed' | 'running' | 'stopped'
 
+export type TcCorrectionMethod = 'exact' | 'interpolated' | 'nearest'
+
 export type TcLog = {
   id: string
   number: number
@@ -38,6 +40,20 @@ export type TcLog = {
   scratchOverridden?: boolean
   previousAnchorDistanceKm?: number
   previousAnchorIdealElapsedSeconds?: number
+  // Original button-press capture is kept permanently in hitMs / odoKm / deviationSeconds.
+  // Official marshal-time correction is stored separately so no recorded data is overwritten.
+  capturedRawDistanceKm?: number
+  calibrationFactorAtHit?: number
+  officialHitMs?: number | null
+  officialOdoKm?: number | null
+  officialRawDistanceKm?: number | null
+  officialActualElapsedSeconds?: number | null
+  officialIdealElapsedSeconds?: number | null
+  officialDeviationSeconds?: number | null
+  correctionMethod?: TcCorrectionMethod | null
+  correctionGpsAccuracyM?: number | null
+  correctionLat?: number | null
+  correctionLon?: number | null
 }
 
 export type SftcLog = {
@@ -75,6 +91,20 @@ export type GpsPoint = {
   accuracyM: number
   speedMps: number | null
   timestampMs: number
+}
+
+export type GpsOdoSample = {
+  timestampMs: number
+  rawDistanceKm: number
+  accuracyM: number
+  lat: number
+  lon: number
+}
+
+export type GpsOdoEstimate = GpsOdoSample & {
+  method: TcCorrectionMethod
+  sourceBeforeMs: number
+  sourceAfterMs: number
 }
 
 export type GpsState = {
