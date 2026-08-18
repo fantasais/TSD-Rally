@@ -1,26 +1,20 @@
-# TSD Rally V0.1
+# TSD Rally V0.5 — Local OCR build
 
-A deliberately simple, offline-first TSD rally computer for a navigator using a physical roadbook plus organiser-supplied speed chart.
+Android-first TSD rally PWA with GPS timing, TC/SFTC logging and local photo speed-chart import.
 
-## V0.1 scope
+## V0.5 photo import
 
-- Speed-chart entry by distance sector
-- Official start date/time and automatic armed start
-- Live high-accuracy browser GPS watch
-- Cumulative GPS odometer with basic noise/jump rejection
-- Calibration factor from official vs measured calibration distance
-- Manual `-10 m`, `+10 m`, and `SET ODO` correction
-- Live ideal-vs-actual timing deviation in seconds
-- Automatic target-speed changes by rally odometer distance
-- Next speed-change distance
-- Offline PWA cache
-- Screen Wake Lock request while armed/running
-- Local persistence of settings/session/GPS raw trip
-- Simulation mode for desk testing
+- Select a speed-chart photograph from the phone.
+- OCR runs in the browser on the phone using Tesseract.js / WebAssembly.
+- No OpenAI API key, Vercel Function or per-scan API billing is required.
+- The importer reads START ODO / END ODO / SPEED and recognises rows containing `MINUTE(S)` as time-defined DZ/FZ entries.
+- Every interpreted row remains editable before `CONFIRM & LOAD`.
+- Deterministic continuity checks flag gaps, overlaps, invalid speeds and invalid durations.
+- Manual chart entry remains available at all times.
 
-## Critical operating principle
+### First-use note
 
-The organiser's roadbook distance is the master reference. GPS is only the measuring instrument. Calibrate before the rally and correct the app odometer whenever a trustworthy roadbook distance reference is available.
+The OCR engine/language assets may need to download once on first use. Tesseract.js caches trained language data in the browser, and the PWA also caches its jsDelivr OCR runtime requests. For the safest rally workflow, open the app and run one test photo before heading to an area with weak data coverage.
 
 ## Local development
 
@@ -30,32 +24,13 @@ npm run test
 npm run dev
 ```
 
-## Production build
+## Production
 
-```bash
-npm run build
-```
+Deploy to Vercel using the Vite preset and `dist` output directory. No environment variables are required for OCR.
 
-## Vercel
+## V0.5 field-feedback refinements
 
-1. Push this folder to a GitHub repository.
-2. Import the repository into Vercel.
-3. Framework preset: Vite. No `vercel.json` is required for V0.1 because the app uses a single page without client-side URL routes.
-4. Build command: `npm run build`.
-5. Output directory: `dist`.
-6. Deploy.
-7. Open the HTTPS URL on the rally phone and allow precise location.
-8. Add/install the PWA to the home screen.
-
-## Before using it in an event
-
-- Confirm electronic/GPS rally computers are permitted by your event/class regulations.
-- Keep the app in the foreground during competitive sections.
-- Disable battery optimisation for the browser/PWA if Android allows it.
-- Test GPS permission, wake lock and offline reload on the actual phone.
-- Run a calibration route and a mock TSD route before rally day.
-- Carry the organiser's roadbook and a backup timing method. V0.1 is new software, not a homologated rally computer.
-
-## GPS filter currently used
-
-The first build rejects fixes with >50 m reported accuracy, impossible jumps above 180 km/h, tiny movements below an accuracy-aware noise gate, and small position movements when the device reports near-zero speed. This must be tuned from real road-test data rather than theory.
+- Rally timing strip shows 24-hour ACTUAL TIME and IDEAL TIME instead of elapsed rally clocks.
+- New CONTROLS tab records TC stamps and allows ODO/time correction. The latest TC correction re-anchors live timing; older corrections update history only.
+- Press Enter on the final speed/time value in Setup to create the next SPEED row automatically and focus its TO km field.
+- Local speed-chart OCR remains browser-side with Tesseract.js; no API key is required.

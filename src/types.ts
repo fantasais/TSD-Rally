@@ -2,10 +2,6 @@ export type SegmentKind = 'speed' | 'zone'
 export type ZoneType = 'DZ' | 'FZ'
 export type ZoneBasis = 'speed' | 'time'
 
-/**
- * Kept as SpeedSector for backwards compatibility with V0.3 local storage.
- * V0.4 also allows a DZ/FZ zone to live in the same distance-ordered chart.
- */
 export type SpeedSector = {
   id: string
   fromKm: number
@@ -40,6 +36,22 @@ export type TcLog = {
   lon: number | null
   officialRestartMs?: number | null
   scratchOverridden?: boolean
+  previousAnchorDistanceKm?: number
+  previousAnchorIdealElapsedSeconds?: number
+}
+
+export type SftcLog = {
+  id: string
+  number: number
+  hitMs: number
+  cardTimeMs: number
+  odoKm: number
+  deviationSeconds: number
+  actualElapsedSeconds: number
+  idealElapsedSeconds: number
+  gpsAccuracyM: number | null
+  lat: number | null
+  lon: number | null
 }
 
 export type RallySession = {
@@ -52,7 +64,9 @@ export type RallySession = {
   timingAnchorIdealElapsedSeconds: number
   tcCount: number
   tcLogs?: TcLog[]
+  sftcLogs?: SftcLog[]
   pendingRestartTcId?: string | null
+  pendingSftcId?: string | null
 }
 
 export type GpsPoint = {
