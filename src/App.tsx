@@ -67,6 +67,18 @@ function restartMsFromClock(clockValue: string, tcHitMs: number): number | null 
   return restart.getTime()
 }
 
+function effectiveTcHitMs(log: TcLog) {
+  return log.officialHitMs ?? log.hitMs
+}
+
+function effectiveTcOdoKm(log: TcLog) {
+  return log.officialOdoKm ?? log.odoKm
+}
+
+function effectiveTcDeviationSeconds(log: TcLog) {
+  return log.officialDeviationSeconds ?? log.deviationSeconds
+}
+
 function editableClockMs(clockValue: string, referenceMs: number): number | null {
   const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(clockValue.trim())
   if (!match) return null
@@ -126,7 +138,7 @@ function App() {
   const [settings, setSettings] = useState<RallySettings>(() => loadJson(SETTINGS_KEY, DEFAULT_SETTINGS))
   const [session, setSession] = useState<RallySession>(() => loadJson(SESSION_KEY, DEFAULT_SESSION))
   const [nowMs, setNowMs] = useState(Date.now())
-  const { gps, startGps } = useGpsOdometer()
+  const { gps, startGps, estimateRawDistanceAtMs } = useGpsOdometer()
   const wake = useWakeLock(session.status === 'armed' || session.status === 'running')
 
   const sortedSectors = useMemo(() => sortSectors(settings.sectors), [settings.sectors])
@@ -281,7 +293,19 @@ function App() {
       officialRestartMs: null,
       scratchOverridden: false,
       previousAnchorDistanceKm: session.timingAnchorDistanceKm,
-      previousAnchorIdealElapsedSeconds: session.timingAnchorIdealElapsedSeconds
+      previousAnchorIdealElapsedSeconds: session.timingAnchorIdealElapsedSeconds,
+      capturedRawDistanceKm: gps.rawDistanceKm,
+      calibrationFactorAtHit: settings.calibrationFactor,
+      officialHitMs: null,
+      officialOdoKm: null,
+      officialRawDistanceKm: null,
+      officialActualElapsedSeconds: null,
+      officialIdealElapsedSeconds: null,
+      officialDeviationSeconds: null,
+      correctionMethod: null,
+      correctionGpsAccuracyM: null,
+      correctionLat: null,
+      correctionLon: null
     }
 
     setSession((current) => ({
@@ -296,41 +320,62 @@ function App() {
     if ('vibrate' in navigator) navigator.vibrate?.(60)
   }
 
-  const updateTcCorrection = (tcId: string, correctedOdoKm: number, correctedClockValue: string) => {
+  const updateTcCorrection = (tcId: string, officialClockValue: string) => {
     if (session.startMs === null) return
 
     const tcIndex = tcLogs.findIndex((log) => log.id === tcId)
     if (tcIndex < 0) return
 
     const tc = tcLogs[tcIndex]
-    const correctedHitMs = editableClockMs(correctedClockValue, tc.hitMs)
-
-    if (correctedHitMs === null || !Number.isFinite(correctedOdoKm) || correctedOdoKm < 0) {
-      alert('Enter a valid TC odometer and time.')
+    const officialHitMs = editableClockMs(officialClockValue, tc.hitMs)
+    if (officialHitMs === null) {
+      alert('Enter a valid official TC time.')
       return
     }
 
+    const officialEstimate = estimateRawDistanceAtMs(officialHitMs)
+    const capturedEstimate = tc.capturedRawDistanceKm === undefined
+      ? estimateRawDistanceAtMs(tc.hitMs)
+      : null
+    const capturedRawDistanceKm = tc.capturedRawDistanceKm ?? capturedEstimate?.rawDistanceKm ?? null
+
+    if (!officialEstimate || capturedRawDistanceKm === null) {
+      alert('GPS history around this TC is not reliable enough to reconstruct the odometer automatically. The original TC record has been kept unchanged.')
+      return
+    }
+
+    const calibrationAtHit = tc.calibrationFactorAtHit ?? settings.calibrationFactor
+    const officialOdoKm = Math.max(
+      0,
+      tc.odoKm + (officialEstimate.rawDistanceKm - capturedRawDistanceKm) * calibrationAtHit
+    )
+
     const previousAnchorDistanceKm = tc.previousAnchorDistanceKm ?? 0
     const previousAnchorIdealElapsedSeconds = tc.previousAnchorIdealElapsedSeconds ?? 0
-    const correctedElapsedSeconds = Math.max(0, (correctedHitMs - session.startMs) / 1000)
-    const correctedIdealElapsedSeconds = idealElapsedSecondsFromAnchor(
-      correctedOdoKm,
+    const officialActualElapsedSeconds = Math.max(0, (officialHitMs - session.startMs) / 1000)
+    const officialIdealElapsedSeconds = idealElapsedSecondsFromAnchor(
+      officialOdoKm,
       sortedSectors,
       previousAnchorDistanceKm,
       previousAnchorIdealElapsedSeconds
     )
-    const correctedDeviationSeconds = deviationSeconds(correctedElapsedSeconds, correctedIdealElapsedSeconds)
+    const officialDeviationSeconds = deviationSeconds(officialActualElapsedSeconds, officialIdealElapsedSeconds)
     const isLatestTc = tcIndex === tcLogs.length - 1
 
     setSession((current) => {
       const nextLogs = (current.tcLogs ?? []).map((log) => log.id === tcId
         ? {
             ...log,
-            hitMs: correctedHitMs,
-            odoKm: correctedOdoKm,
-            actualElapsedSeconds: correctedElapsedSeconds,
-            idealElapsedSeconds: correctedIdealElapsedSeconds,
-            deviationSeconds: correctedDeviationSeconds
+            officialHitMs,
+            officialOdoKm,
+            officialRawDistanceKm: officialEstimate.rawDistanceKm,
+            officialActualElapsedSeconds,
+            officialIdealElapsedSeconds,
+            officialDeviationSeconds,
+            correctionMethod: officialEstimate.method,
+            correctionGpsAccuracyM: officialEstimate.accuracyM,
+            correctionLat: officialEstimate.lat,
+            correctionLon: officialEstimate.lon
           }
         : log)
 
@@ -340,12 +385,12 @@ function App() {
 
       const liveAnchorIdealElapsedSeconds = tc.officialRestartMs
         ? Math.max(0, (tc.officialRestartMs - session.startMs!) / 1000)
-        : correctedElapsedSeconds + tc.scratchSeconds
+        : officialActualElapsedSeconds + tc.scratchSeconds
 
       return {
         ...current,
         tcLogs: nextLogs,
-        timingAnchorDistanceKm: correctedOdoKm,
+        timingAnchorDistanceKm: officialOdoKm,
         timingAnchorIdealElapsedSeconds: liveAnchorIdealElapsedSeconds
       }
     })
@@ -359,12 +404,13 @@ function App() {
     const tc = tcLogs.find((log) => log.id === tcId)
     if (!tc) return
 
-    const restartMs = restartMsFromClock(clockValue, tc.hitMs)
+    const tcArrivalMs = effectiveTcHitMs(tc)
+    const restartMs = restartMsFromClock(clockValue, tcArrivalMs)
     if (restartMs === null) {
       alert('Enter a valid official restart time.')
       return
     }
-    if (restartMs < tc.hitMs) {
+    if (restartMs < tcArrivalMs) {
       alert('Official restart time cannot be before the TC arrival time.')
       return
     }
@@ -373,7 +419,7 @@ function App() {
 
     setSession((current) => ({
       ...current,
-      timingAnchorDistanceKm: tc.odoKm,
+      timingAnchorDistanceKm: effectiveTcOdoKm(tc),
       timingAnchorIdealElapsedSeconds: anchorElapsedSeconds,
       pendingRestartTcId: null,
       tcLogs: (current.tcLogs ?? []).map((log) => log.id === tcId
@@ -836,9 +882,12 @@ function RallyScreen(props: RallyScreenProps) {
           ) : tcLogs.map((log) => (
             <div className="tc-log-row" key={log.id}>
               <div className="tc-log-number">TC {String(log.number).padStart(2, '0')}</div>
-              <div><span>ODO</span><strong>{log.odoKm.toFixed(3)} km</strong></div>
-              <div><span>TIME</span><strong>{clockTime(log.hitMs)}</strong></div>
-              <div><span>STATUS</span><strong>{formatDeviation(log.deviationSeconds)} {timingState(log.deviationSeconds)}</strong></div>
+              <div><span>{log.officialOdoKm !== null && log.officialOdoKm !== undefined ? 'AUTO ODO' : 'ODO'}</span><strong>{effectiveTcOdoKm(log).toFixed(3)} km</strong></div>
+              <div><span>{log.officialHitMs ? 'OFFICIAL TIME' : 'TIME'}</span><strong>{clockTime(effectiveTcHitMs(log))}</strong></div>
+              <div><span>STATUS</span><strong>{formatDeviation(effectiveTcDeviationSeconds(log))} {timingState(effectiveTcDeviationSeconds(log))}</strong></div>
+              {log.officialHitMs && (
+                <div><span>ORIGINAL CAPTURE</span><strong>{clockTime(log.hitMs)} · {log.odoKm.toFixed(3)} km</strong></div>
+              )}
               <div>
                 <span>{log.officialRestartMs ? 'RESTART' : 'SCRATCH'}</span>
                 <strong>{log.officialRestartMs ? `${clockTime(log.officialRestartMs)} · SCRATCH OVERRIDDEN` : formatDuration(log.scratchSeconds)}</strong>
@@ -982,7 +1031,7 @@ function RallyScreen(props: RallyScreenProps) {
 type ControlsScreenProps = {
   tcLogs: TcLog[]
   sftcLogs: SftcLog[]
-  updateTcCorrection: (tcId: string, correctedOdoKm: number, correctedClockValue: string) => void
+  updateTcCorrection: (tcId: string, officialClockValue: string) => void
 }
 
 function ControlsScreen({ tcLogs, sftcLogs, updateTcCorrection }: ControlsScreenProps) {
@@ -993,7 +1042,7 @@ function ControlsScreen({ tcLogs, sftcLogs, updateTcCorrection }: ControlsScreen
       <section className="panel">
         <div className="eyebrow">CONTROL RECORD</div>
         <h1>TIME CONTROLS</h1>
-        <p className="section-copy">The latest TC can be corrected for the delay between crossing the control and pressing TC. Applying a correction re-anchors the live rally timing from that corrected ODO and time.</p>
+        <p className="section-copy">Enter only the official TC time written by the marshal. The app reconstructs the TC odometer from its timestamped GPS history. The original button-press time, ODO and timing data are always retained.</p>
 
         {tcLogs.length === 0 ? (
           <p className="empty-log">No TCs recorded yet.</p>
@@ -1029,17 +1078,18 @@ function ControlsScreen({ tcLogs, sftcLogs, updateTcCorrection }: ControlsScreen
 type TcCorrectionCardProps = {
   log: TcLog
   isLatest: boolean
-  onApply: (tcId: string, correctedOdoKm: number, correctedClockValue: string) => void
+  onApply: (tcId: string, officialClockValue: string) => void
 }
 
 function TcCorrectionCard({ log, isLatest, onApply }: TcCorrectionCardProps) {
-  const [odo, setOdo] = useState(log.odoKm.toFixed(3))
-  const [time, setTime] = useState(timeInputValue(log.hitMs))
+  const [time, setTime] = useState(timeInputValue(effectiveTcHitMs(log)))
+  const hasOfficialCorrection = log.officialHitMs !== null && log.officialHitMs !== undefined &&
+    log.officialOdoKm !== null && log.officialOdoKm !== undefined
+  const effectiveDeviation = effectiveTcDeviationSeconds(log)
 
   useEffect(() => {
-    setOdo(log.odoKm.toFixed(3))
-    setTime(timeInputValue(log.hitMs))
-  }, [log.odoKm, log.hitMs])
+    setTime(timeInputValue(effectiveTcHitMs(log)))
+  }, [log.hitMs, log.officialHitMs])
 
   return (
     <div className="tc-correction-card">
@@ -1048,20 +1098,33 @@ function TcCorrectionCard({ log, isLatest, onApply }: TcCorrectionCardProps) {
         <span>{isLatest ? 'LIVE ANCHOR' : 'HISTORY'}</span>
       </div>
 
+      <div className="tc-correction-meta">
+        <span>CAPTURED {clockTime(log.hitMs)} · {log.odoKm.toFixed(3)} km</span>
+      </div>
+
       <div className="tc-correction-fields">
-        <label>TC ODO km
-          <input inputMode="decimal" type="number" step="0.001" value={odo} onChange={(e) => setOdo(e.target.value)} />
-        </label>
-        <label>TC TIME
+        <label>OFFICIAL TC TIME
           <input type="time" step="1" value={time} onChange={(e) => setTime(e.target.value)} />
         </label>
+        <label>AUTO TC ODO
+          <input
+            type="text"
+            readOnly
+            value={hasOfficialCorrection ? `${log.officialOdoKm!.toFixed(3)} km` : 'Calculated on apply'}
+          />
+        </label>
       </div>
+
       <div className="tc-correction-meta">
-        <span>{formatDeviation(log.deviationSeconds)} {timingState(log.deviationSeconds)}</span>
+        {hasOfficialCorrection && <span>{formatDeviation(effectiveDeviation)} {timingState(effectiveDeviation)}</span>}
+        {hasOfficialCorrection && log.correctionMethod && (
+          <span>GPS {log.correctionMethod.toUpperCase()}{log.correctionGpsAccuracyM === null || log.correctionGpsAccuracyM === undefined ? '' : ` · ${Math.round(log.correctionGpsAccuracyM)} m accuracy`}</span>
+        )}
         {log.officialRestartMs && <span>Restart {clockTime(log.officialRestartMs)}</span>}
         {!isLatest && <span>History edit only · live timing is anchored by the latest TC</span>}
+        <span>Original capture retained</span>
       </div>
-      <button className="primary-button full-button" onClick={() => onApply(log.id, Number(odo), time)}>APPLY TC CORRECTION</button>
+      <button className="primary-button full-button" onClick={() => onApply(log.id, time)}>APPLY OFFICIAL TC TIME</button>
     </div>
   )
 }
