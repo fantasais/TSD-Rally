@@ -29,23 +29,63 @@ type FlatWord = {
 }
 
 let activeProgress: ProgressCallback | null = null
+let activeWorkerError: ((error: unknown) => void) | null = null
 let workerPromise: ReturnType<typeof createWorker> | null = null
+
+function publicAsset(path: string) {
+  const base = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`
+  return `${base}${path.replace(/^\/+/, '')}`
+}
+
+function errorText(error: unknown) {
+  if (error instanceof Error) return error.message
+  if (typeof error === 'string') return error
+  return 'Unknown OCR engine error'
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs)
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer)
+        resolve(value)
+      },
+      (error) => {
+        window.clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
 
 function getWorker() {
   if (!workerPromise) {
+    activeProgress?.(0.08, 'Loading offline OCR engine')
     workerPromise = createWorker('eng', OEM.LSTM_ONLY, {
+      workerPath: publicAsset('ocr/worker.min.js'),
+      corePath: publicAsset('ocr/core'),
+      langPath: publicAsset('ocr/lang'),
       logger: (message) => {
         const progress = typeof message.progress === 'number' ? message.progress : 0
         activeProgress?.(progress, message.status || 'Preparing OCR')
+      },
+      errorHandler: (error) => {
+        activeWorkerError?.(error)
       }
-    }).then(async (worker) => {
-      await worker.setParameters({
-        tessedit_pageseg_mode: PSM.SPARSE_TEXT,
-        preserve_interword_spaces: '1',
-        user_defined_dpi: '300'
-      })
-      return worker
     })
+      .then(async (worker) => {
+        await worker.setParameters({
+          tessedit_pageseg_mode: PSM.SPARSE_TEXT,
+          preserve_interword_spaces: '1',
+          user_defined_dpi: '300'
+        })
+        return worker
+      })
+      .catch((error) => {
+        workerPromise = null
+        throw error
+      })
   }
   return workerPromise
 }
@@ -387,20 +427,43 @@ function dedupeAndAnnotate(rows: LocalOcrRow[]) {
 
 async function recognizeSpeedChartPhoto(file: File, onProgress?: ProgressCallback): Promise<LocalOcrRow[]> {
   activeProgress = onProgress ?? null
-  activeProgress?.(0.02, 'Preparing image')
+  activeProgress?.(0.02, 'Photo selected')
+
+  let worker: Awaited<ReturnType<typeof createWorker>> | null = null
+  let rejectWorkerError: ((reason?: unknown) => void) | null = null
+  const workerError = new Promise<never>((_, reject) => {
+    rejectWorkerError = reject
+  })
+
+  activeWorkerError = (error) => {
+    rejectWorkerError?.(new Error(`Local OCR engine error: ${errorText(error)}`))
+  }
 
   try {
+    activeProgress?.(0.04, 'Preparing image')
     const canvas = await prepareImage(file)
-    activeProgress?.(0.08, 'Loading local OCR')
-    const worker = await getWorker()
 
-    const result = await worker.recognize(
-      canvas,
-      { rotateAuto: true },
-      { text: true, blocks: true }
+    worker = await withTimeout(
+      Promise.race([getWorker(), workerError]),
+      30000,
+      'Local OCR engine did not start within 30 seconds. Open the app once while online so the updated offline assets can finish installing, then try again.'
     )
 
-    activeProgress?.(0.96, 'Reading chart rows')
+    activeProgress?.(0.18, 'Reading photo')
+    const result = await withTimeout(
+      Promise.race([
+        worker.recognize(
+          canvas,
+          { rotateAuto: true },
+          { text: true, blocks: true }
+        ),
+        workerError
+      ]),
+      90000,
+      'Photo recognition took longer than 90 seconds. Try a closer, sharper photo with the table filling most of the frame.'
+    )
+
+    activeProgress?.(0.96, 'Parsing chart rows')
     const words = result.data.blocks ? flattenWords(result.data.blocks) : []
     const structured = rowsFromColumns(words)
     const fallback = structured.length >= 2 ? [] : rowsFromText(result.data.text ?? '')
@@ -412,8 +475,20 @@ async function recognizeSpeedChartPhoto(file: File, onProgress?: ProgressCallbac
 
     activeProgress?.(1, 'Ready to review')
     return rows
+  } catch (error) {
+    // A worker that has failed once can remain poisoned. Dispose it so Retry starts cleanly.
+    workerPromise = null
+    if (worker) {
+      try {
+        await worker.terminate()
+      } catch {
+        // Nothing else to do; the next attempt will create a fresh worker.
+      }
+    }
+    throw error
   } finally {
     activeProgress = null
+    activeWorkerError = null
   }
 }
 
@@ -536,7 +611,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
     setRows(null)
     setFileName(file.name)
     setProgress(0)
-    setStatus('Preparing image')
+    setStatus('Photo selected')
 
     try {
       const parsed = await recognizeSpeedChartPhoto(file, (nextProgress, nextStatus) => {
@@ -546,7 +621,10 @@ export default function SpeedChartImporter({ onLoad }: Props) {
 
       setRows(parsed.map((row) => ({ ...row, id: crypto.randomUUID(), source: 'ocr' as const })))
     } catch (scanError) {
-      setError(scanError instanceof Error ? scanError.message : 'Could not interpret the speed chart.')
+      const message = scanError instanceof Error ? scanError.message : 'Could not interpret the speed chart.'
+      setStatus('OCR failed')
+      setProgress(0)
+      setError(message)
     } finally {
       setBusy(false)
     }
@@ -596,7 +674,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
       <input
         ref={inputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp"
+        accept="image/*"
         style={{ display: 'none' }}
         onChange={(event) => {
           const file = event.target.files?.[0]
