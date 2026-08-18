@@ -418,7 +418,28 @@ async function recognizeSpeedChartPhoto(file: File, onProgress?: ProgressCallbac
 }
 
 
-type ReviewRow = LocalOcrRow & { id: string }
+type ReviewRow = LocalOcrRow & {
+  id: string
+  source?: 'ocr' | 'manual'
+}
+
+function sortReviewRows(rows: ReviewRow[]) {
+  return [...rows].sort((a, b) => {
+    const fromA = Number.isFinite(a.fromKm) ? a.fromKm : Number.POSITIVE_INFINITY
+    const fromB = Number.isFinite(b.fromKm) ? b.fromKm : Number.POSITIVE_INFINITY
+    if (Math.abs(fromA - fromB) > 0.000001) return fromA - fromB
+
+    const toA = Number.isFinite(a.toKm) ? a.toKm : Number.POSITIVE_INFINITY
+    const toB = Number.isFinite(b.toKm) ? b.toKm : Number.POSITIVE_INFINITY
+    return toA - toB
+  })
+}
+
+function rowIsComplete(row: ReviewRow) {
+  if (!Number.isFinite(row.fromKm) || !Number.isFinite(row.toKm) || !(row.toKm > row.fromKm)) return false
+  if (row.mode === 'zone_time') return row.durationSeconds > 0
+  return row.speedKph > 0
+}
 
 type Props = {
   onLoad: (sectors: SpeedSector[]) => void
@@ -428,7 +449,11 @@ function hardIssues(rows: ReviewRow[]): string[] {
   const issues: string[] = []
   if (!rows.length) return ['No chart entries were found.']
 
-  rows.forEach((row, index) => {
+  // Always validate in ODO order. A manually added row may have been created at
+  // the bottom of the list but belongs somewhere in the middle of the chart.
+  const ordered = sortReviewRows(rows)
+
+  ordered.forEach((row, index) => {
     const n = index + 1
     if (!Number.isFinite(row.fromKm) || !Number.isFinite(row.toKm) || row.toKm <= row.fromKm) {
       issues.push(`Row ${n}: check START / END ODO.`)
@@ -440,19 +465,19 @@ function hardIssues(rows: ReviewRow[]): string[] {
       issues.push(`Row ${n}: check zone time.`)
     }
     if (index > 0) {
-      const previous = rows[index - 1]
+      const previous = ordered[index - 1]
       if (Math.abs(previous.toKm - row.fromKm) > 0.001) {
         issues.push(`Rows ${index}–${n}: gap/overlap ${previous.toKm.toFixed(3)} → ${row.fromKm.toFixed(3)}.`)
       }
     }
   })
 
-  if (Math.abs(rows[0].fromKm) > 0.001) issues.push('First entry does not start at 0.000 km.')
+  if (Math.abs(ordered[0].fromKm) > 0.001) issues.push('First entry does not start at 0.000 km.')
   return issues
 }
 
 function toSectors(rows: ReviewRow[]): SpeedSector[] {
-  return rows.map((row) => {
+  return sortReviewRows(rows).map((row) => {
     if (row.mode === 'speed') {
       return {
         id: crypto.randomUUID(),
@@ -519,7 +544,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
         setStatus(nextStatus)
       })
 
-      setRows(parsed.map((row) => ({ ...row, id: crypto.randomUUID() })))
+      setRows(parsed.map((row) => ({ ...row, id: crypto.randomUUID(), source: 'ocr' as const })))
     } catch (scanError) {
       setError(scanError instanceof Error ? scanError.message : 'Could not interpret the speed chart.')
     } finally {
@@ -529,6 +554,19 @@ export default function SpeedChartImporter({ onLoad }: Props) {
 
   const update = (id: string, patch: Partial<ReviewRow>) => {
     setRows((current) => current?.map((row) => row.id === id ? { ...row, ...patch } : row) ?? null)
+  }
+
+  const settleRow = (id: string) => {
+    setRows((current) => {
+      if (!current) return null
+      const row = current.find((item) => item.id === id)
+      if (!row || !rowIsComplete(row)) return current
+
+      // Once a row has usable START/END/value data, place it automatically in
+      // the chart according to START ODO. This also makes continuity validation
+      // recalculate against its real neighbours immediately.
+      return sortReviewRows(current)
+    })
   }
 
   const remove = (id: string) => {
@@ -547,7 +585,8 @@ export default function SpeedChartImporter({ onLoad }: Props) {
         speedKph: 0,
         durationSeconds: 0,
         confidence: 'high',
-        note: 'Manual row'
+        note: 'Manual row',
+        source: 'manual'
       }]
     })
   }
@@ -635,7 +674,8 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                       type="number"
                       step="0.001"
                       value={row.fromKm}
-                      onChange={(e) => update(row.id, { fromKm: Number(e.target.value), confidence: 'high' })}
+                      onChange={(e) => update(row.id, { fromKm: Number(e.target.value), confidence: 'high', note: row.source === 'manual' ? 'Manual row' : '' })}
+                      onBlur={() => settleRow(row.id)}
                     />
 
                     <input
@@ -644,7 +684,8 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                       type="number"
                       step="0.001"
                       value={row.toKm}
-                      onChange={(e) => update(row.id, { toKm: Number(e.target.value), confidence: 'high' })}
+                      onChange={(e) => update(row.id, { toKm: Number(e.target.value), confidence: 'high', note: row.source === 'manual' ? 'Manual row' : '' })}
+                      onBlur={() => settleRow(row.id)}
                     />
 
                     {row.mode === 'zone_time' ? (
@@ -657,8 +698,10 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                           value={minutes}
                           onChange={(e) => update(row.id, {
                             durationSeconds: Math.max(0, Number(e.target.value)) * 60 + seconds,
-                            confidence: 'high'
+                            confidence: 'high',
+                            note: row.source === 'manual' ? 'Manual row' : ''
                           })}
+                          onBlur={() => settleRow(row.id)}
                         />
                         <span>:</span>
                         <input
@@ -670,8 +713,10 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                           value={seconds}
                           onChange={(e) => update(row.id, {
                             durationSeconds: minutes * 60 + Math.max(0, Math.min(59, Number(e.target.value))),
-                            confidence: 'high'
+                            confidence: 'high',
+                            note: row.source === 'manual' ? 'Manual row' : ''
                           })}
+                          onBlur={() => settleRow(row.id)}
                         />
                       </div>
                     ) : (
@@ -681,14 +726,18 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                         type="number"
                         step="0.1"
                         value={row.speedKph}
-                        onChange={(e) => update(row.id, { speedKph: Number(e.target.value), confidence: 'high' })}
+                        onChange={(e) => update(row.id, { speedKph: Number(e.target.value), confidence: 'high', note: row.source === 'manual' ? 'Manual row' : '' })}
+                        onBlur={() => settleRow(row.id)}
                       />
                     )}
 
                     <select
                       aria-label={`Row ${index + 1} type`}
                       value={row.mode}
-                      onChange={(e) => update(row.id, { mode: e.target.value as LocalOcrMode, confidence: 'high' })}
+                      onChange={(e) => {
+                        update(row.id, { mode: e.target.value as LocalOcrMode, confidence: 'high', note: row.source === 'manual' ? 'Manual row' : '' })
+                        window.requestAnimationFrame(() => settleRow(row.id))
+                      }}
                     >
                       <option value="speed">SPEED</option>
                       <option value="zone_speed">DZ/FZ SPD</option>
@@ -703,6 +752,9 @@ export default function SpeedChartImporter({ onLoad }: Props) {
           </div>
 
           <button className="secondary-button full-button ocr-add-row" onClick={addRow}>+ ROW</button>
+          <div className="ocr-import-note ocr-manual-hint">
+            Manual rows move automatically into ODO order once START, END and SPEED/TIME are complete.
+          </div>
 
           {issues.length > 0 && (
             <div className="error-box ocr-issues">
