@@ -382,7 +382,7 @@ function App() {
     )
     const officialDeviationSeconds = deviationSeconds(officialActualElapsedSeconds, officialIdealElapsedSeconds)
     const isLatestTc = tcIndex === tcLogs.length - 1
-    const effectiveOdoSource = odoSource === 'gps-auto' && autoSuggestion ? 'gps-auto' : 'manual'
+    const effectiveOdoSource: 'gps-auto' | 'manual' = odoSource === 'gps-auto' && autoSuggestion ? 'gps-auto' : 'manual'
 
     setSession((current) => {
       const nextLogs = (current.tcLogs ?? []).map((log) => log.id === tcId
