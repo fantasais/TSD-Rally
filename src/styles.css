@@ -194,3 +194,118 @@ input:focus { outline: 2px solid var(--green); outline-offset: 1px; }
   .nav-tabs button { font-size: 11px; letter-spacing: .045em; }
   .tc-correction-fields { grid-template-columns: 1fr 1fr; gap:6px; }
 }
+
+/* V0.5 OCR review: compact chart layout for rapid visual verification */
+.ocr-importer {
+  border: 1px solid #353535;
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 18px;
+  background: #0b0b0b;
+}
+.ocr-import-head { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.ocr-import-head strong { display:block; font-size:13px; }
+.ocr-import-head span { display:block; margin-top:2px; color:#aaa; font-size:11px; line-height:1.35; }
+.ocr-import-note, .ocr-file-name { margin-top:7px; color:#777; font-size:10px; line-height:1.35; }
+.ocr-progress-wrap { margin-top:11px; }
+.ocr-progress-track { height:5px; border-radius:999px; background:#252525; overflow:hidden; }
+.ocr-progress-fill { height:100%; background:#fff; transition:width 180ms ease; }
+.ocr-progress-text { margin-top:6px; color:#aaa; font-size:10px; }
+.ocr-error { margin-top:11px; }
+.ocr-review { margin-top:14px; }
+.ocr-review-summary { display:flex; justify-content:space-between; align-items:baseline; gap:10px; margin-bottom:7px; }
+.ocr-review-summary strong { font-size:12px; }
+.ocr-review-summary span { color:#999; font-size:10px; font-weight:900; }
+.ocr-review-summary span.needs-check { color:var(--amber); }
+
+.ocr-table-wrap { width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.ocr-table-head,
+.ocr-review-row {
+  display:grid;
+  grid-template-columns: 32px minmax(70px,1fr) minmax(70px,1fr) minmax(72px,.9fr) minmax(84px,.95fr) 34px;
+  gap:6px;
+  align-items:center;
+  min-width: 390px;
+}
+.ocr-table-head {
+  padding:0 5px 5px;
+  color:var(--muted);
+  font-size:8px;
+  font-weight:950;
+  letter-spacing:.06em;
+}
+.ocr-table-head span { white-space:nowrap; }
+.ocr-review-row {
+  position:relative;
+  padding:7px 5px;
+  border-top:1px solid var(--line);
+  background:#0b0b0b;
+}
+.ocr-review-row:first-child { border-top:1px solid #343434; }
+.ocr-review-row.needs-check { background:#151105; box-shadow:inset 3px 0 0 var(--amber); }
+.ocr-review-row.zone-row { background:#101008; }
+.ocr-row-number { min-width:0; }
+.ocr-row-number strong { display:block; font-size:11px; font-variant-numeric:tabular-nums; }
+.ocr-row-number span { display:block; margin-top:2px; color:var(--amber); font-size:6px; font-weight:1000; letter-spacing:.04em; }
+.ocr-review-row > input,
+.ocr-review-row > select,
+.ocr-time-value input {
+  width:100%;
+  min-width:0;
+  min-height:38px;
+  margin:0;
+  padding:6px 7px;
+  border:1px solid #393939;
+  border-radius:4px;
+  background:#080808;
+  color:var(--text);
+  font-size:13px;
+  font-weight:850;
+  font-variant-numeric:tabular-nums;
+}
+.ocr-review-row > select {
+  padding-left:5px;
+  padding-right:3px;
+  color:#ddd;
+  font-size:10px;
+  font-weight:900;
+}
+.ocr-review-row.zone-row > select { border-color:#66511e; color:var(--amber); }
+.ocr-time-value { display:grid; grid-template-columns:1fr 8px 1fr; gap:2px; align-items:center; min-width:0; }
+.ocr-time-value span { text-align:center; color:var(--muted); font-weight:1000; }
+.ocr-time-value input { padding-left:3px; padding-right:3px; text-align:center; }
+.ocr-remove-button {
+  width:34px;
+  height:38px;
+  padding:0;
+  border:1px solid #393939;
+  border-radius:4px;
+  background:#090909;
+  color:var(--red);
+  font-size:22px;
+  font-weight:500;
+  line-height:1;
+}
+.ocr-add-row { margin-top:8px; min-height:40px; }
+.ocr-issues { margin-top:10px; }
+.ocr-review-actions { margin-top:10px; }
+
+@media (max-width: 420px) {
+  .ocr-importer { padding:10px; }
+  .ocr-import-head { align-items:flex-start; }
+  .ocr-import-head span { max-width:190px; font-size:10px; }
+  .ocr-import-head .small-button { flex:0 0 auto; padding-left:8px; padding-right:8px; }
+  .ocr-table-head,
+  .ocr-review-row {
+    grid-template-columns: 28px 66px 66px 60px 78px 30px;
+    gap:4px;
+    min-width:348px;
+  }
+  .ocr-table-head { padding-left:3px; padding-right:3px; }
+  .ocr-review-row { padding:6px 3px; }
+  .ocr-review-row > input,
+  .ocr-review-row > select,
+  .ocr-time-value input { min-height:36px; padding:5px; font-size:12px; }
+  .ocr-review-row > select { padding-left:3px; padding-right:2px; font-size:9px; }
+  .ocr-remove-button { width:30px; height:36px; font-size:20px; }
+}
