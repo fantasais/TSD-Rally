@@ -23,6 +23,7 @@ export type RallySettings = {
 export type RallyStatus = 'idle' | 'armed' | 'running' | 'stopped'
 
 export type TcCorrectionMethod = 'exact' | 'interpolated' | 'nearest'
+export type TcOdoCorrectionSource = 'gps-auto' | 'manual'
 
 export type TcLog = {
   id: string
@@ -54,6 +55,7 @@ export type TcLog = {
   correctionGpsAccuracyM?: number | null
   correctionLat?: number | null
   correctionLon?: number | null
+  odoCorrectionSource?: TcOdoCorrectionSource | null
 }
 
 export type SftcLog = {
