@@ -8,8 +8,12 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
-      includeAssets: ['icon-192.png', 'icon-512.png'],
+      // OCR resources are copied into public/ocr before every build. Workbox
+      // scans the final dist folder below and precaches them for flight-mode use.
       manifest: {
+        id: '/',
+        start_url: '/',
+        scope: '/',
         name: 'TSD Rally',
         short_name: 'TSD Rally',
         description: 'Offline TSD rally navigator computer',
@@ -17,6 +21,8 @@ export default defineConfig({
         background_color: '#080808',
         display: 'standalone',
         orientation: 'portrait',
+        prefer_related_applications: false,
+        categories: ['sports', 'navigation'],
         icons: [
           { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
           { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }
@@ -24,7 +30,9 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
-        globPatterns: ['**/*.{js,css,html,png,svg,ico}']
+        globPatterns: ['**/*.{js,css,html,png,svg,ico,wasm,gz}'],
+        // Tesseract core/language files are larger than Workbox's 2 MiB default.
+        maximumFileSizeToCacheInBytes: 15 * 1024 * 1024
       }
     })
   ]
