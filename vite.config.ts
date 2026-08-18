@@ -8,7 +8,8 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       injectRegister: 'auto',
-      includeAssets: ['icon-192.png', 'icon-512.png'],
+      // OCR resources are copied into public/ocr before every build. Workbox
+      // scans the final dist folder below and precaches them for flight-mode use.
       manifest: {
         id: '/',
         start_url: '/',
@@ -29,7 +30,9 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
-        globPatterns: ['**/*.{js,css,html,png,svg,ico}']
+        globPatterns: ['**/*.{js,css,html,png,svg,ico,wasm,gz}'],
+        // Tesseract core/language files are larger than Workbox's 2 MiB default.
+        maximumFileSizeToCacheInBytes: 15 * 1024 * 1024
       }
     })
   ]
