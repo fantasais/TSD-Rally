@@ -80,7 +80,10 @@ function effectiveTcDeviationSeconds(log: TcLog) {
 }
 
 function editableClockMs(clockValue: string, referenceMs: number): number | null {
-  const match = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(clockValue.trim())
+  const value = clockValue.trim()
+  const colonMatch = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value)
+  const compactMatch = /^(\d{2})(\d{2})(\d{2})$/.exec(value)
+  const match = colonMatch ?? compactMatch
   if (!match) return null
 
   const hours = Number(match[1])
@@ -320,7 +323,36 @@ function App() {
     if ('vibrate' in navigator) navigator.vibrate?.(60)
   }
 
-  const updateTcCorrection = (tcId: string, officialClockValue: string) => {
+  const estimateTcOdoFromOfficialTime = (tcId: string, officialClockValue: string) => {
+    const tc = tcLogs.find((log) => log.id === tcId)
+    if (!tc) return null
+
+    const officialHitMs = editableClockMs(officialClockValue, tc.hitMs)
+    if (officialHitMs === null) return null
+
+    const officialEstimate = estimateRawDistanceAtMs(officialHitMs)
+    const capturedEstimate = tc.capturedRawDistanceKm === undefined
+      ? estimateRawDistanceAtMs(tc.hitMs)
+      : null
+    const capturedRawDistanceKm = tc.capturedRawDistanceKm ?? capturedEstimate?.rawDistanceKm ?? null
+
+    if (!officialEstimate || capturedRawDistanceKm === null) return null
+
+    const calibrationAtHit = tc.calibrationFactorAtHit ?? settings.calibrationFactor
+    const odoKm = Math.max(
+      0,
+      tc.odoKm + (officialEstimate.rawDistanceKm - capturedRawDistanceKm) * calibrationAtHit
+    )
+
+    return { odoKm, officialHitMs, estimate: officialEstimate }
+  }
+
+  const updateTcCorrection = (
+    tcId: string,
+    officialClockValue: string,
+    correctedOdoKm: number,
+    odoSource: 'gps-auto' | 'manual'
+  ) => {
     if (session.startMs === null) return
 
     const tcIndex = tcLogs.findIndex((log) => log.id === tcId)
@@ -329,59 +361,48 @@ function App() {
     const tc = tcLogs[tcIndex]
     const officialHitMs = editableClockMs(officialClockValue, tc.hitMs)
     if (officialHitMs === null) {
-      alert('Enter a valid official TC time.')
+      alert('Enter a valid TC time as HH:MM:SS.')
+      return
+    }
+    if (!Number.isFinite(correctedOdoKm) || correctedOdoKm < 0) {
+      alert('Enter a valid TC odometer.')
       return
     }
 
-    const officialEstimate = estimateRawDistanceAtMs(officialHitMs)
-    const capturedEstimate = tc.capturedRawDistanceKm === undefined
-      ? estimateRawDistanceAtMs(tc.hitMs)
-      : null
-    const capturedRawDistanceKm = tc.capturedRawDistanceKm ?? capturedEstimate?.rawDistanceKm ?? null
-
-    if (!officialEstimate || capturedRawDistanceKm === null) {
-      alert('GPS history around this TC is not reliable enough to reconstruct the odometer automatically. The original TC record has been kept unchanged.')
-      return
-    }
-
-    const calibrationAtHit = tc.calibrationFactorAtHit ?? settings.calibrationFactor
-    const officialOdoKm = Math.max(
-      0,
-      tc.odoKm + (officialEstimate.rawDistanceKm - capturedRawDistanceKm) * calibrationAtHit
-    )
+    const autoSuggestion = estimateTcOdoFromOfficialTime(tcId, officialClockValue)
 
     const previousAnchorDistanceKm = tc.previousAnchorDistanceKm ?? 0
     const previousAnchorIdealElapsedSeconds = tc.previousAnchorIdealElapsedSeconds ?? 0
     const officialActualElapsedSeconds = Math.max(0, (officialHitMs - session.startMs) / 1000)
     const officialIdealElapsedSeconds = idealElapsedSecondsFromAnchor(
-      officialOdoKm,
+      correctedOdoKm,
       sortedSectors,
       previousAnchorDistanceKm,
       previousAnchorIdealElapsedSeconds
     )
     const officialDeviationSeconds = deviationSeconds(officialActualElapsedSeconds, officialIdealElapsedSeconds)
     const isLatestTc = tcIndex === tcLogs.length - 1
+    const effectiveOdoSource = odoSource === 'gps-auto' && autoSuggestion ? 'gps-auto' : 'manual'
 
     setSession((current) => {
       const nextLogs = (current.tcLogs ?? []).map((log) => log.id === tcId
         ? {
             ...log,
             officialHitMs,
-            officialOdoKm,
-            officialRawDistanceKm: officialEstimate.rawDistanceKm,
+            officialOdoKm: correctedOdoKm,
+            officialRawDistanceKm: autoSuggestion?.estimate.rawDistanceKm ?? null,
             officialActualElapsedSeconds,
             officialIdealElapsedSeconds,
             officialDeviationSeconds,
-            correctionMethod: officialEstimate.method,
-            correctionGpsAccuracyM: officialEstimate.accuracyM,
-            correctionLat: officialEstimate.lat,
-            correctionLon: officialEstimate.lon
+            correctionMethod: autoSuggestion?.estimate.method ?? null,
+            correctionGpsAccuracyM: autoSuggestion?.estimate.accuracyM ?? null,
+            correctionLat: autoSuggestion?.estimate.lat ?? null,
+            correctionLon: autoSuggestion?.estimate.lon ?? null,
+            odoCorrectionSource: effectiveOdoSource
           }
         : log)
 
-      if (!isLatestTc) {
-        return { ...current, tcLogs: nextLogs }
-      }
+      if (!isLatestTc) return { ...current, tcLogs: nextLogs }
 
       const liveAnchorIdealElapsedSeconds = tc.officialRestartMs
         ? Math.max(0, (tc.officialRestartMs - session.startMs!) / 1000)
@@ -390,7 +411,7 @@ function App() {
       return {
         ...current,
         tcLogs: nextLogs,
-        timingAnchorDistanceKm: officialOdoKm,
+        timingAnchorDistanceKm: correctedOdoKm,
         timingAnchorIdealElapsedSeconds: liveAnchorIdealElapsedSeconds
       }
     })
@@ -549,6 +570,7 @@ function App() {
         <ControlsScreen
           tcLogs={tcLogs}
           sftcLogs={sftcLogs}
+          estimateTcOdo={estimateTcOdoFromOfficialTime}
           updateTcCorrection={updateTcCorrection}
         />
       )}
@@ -1031,10 +1053,16 @@ function RallyScreen(props: RallyScreenProps) {
 type ControlsScreenProps = {
   tcLogs: TcLog[]
   sftcLogs: SftcLog[]
-  updateTcCorrection: (tcId: string, officialClockValue: string) => void
+  estimateTcOdo: (tcId: string, officialClockValue: string) => { odoKm: number } | null
+  updateTcCorrection: (
+    tcId: string,
+    officialClockValue: string,
+    correctedOdoKm: number,
+    odoSource: 'gps-auto' | 'manual'
+  ) => void
 }
 
-function ControlsScreen({ tcLogs, sftcLogs, updateTcCorrection }: ControlsScreenProps) {
+function ControlsScreen({ tcLogs, sftcLogs, estimateTcOdo, updateTcCorrection }: ControlsScreenProps) {
   const latestTcId = tcLogs.length ? tcLogs[tcLogs.length - 1].id : null
 
   return (
@@ -1042,7 +1070,7 @@ function ControlsScreen({ tcLogs, sftcLogs, updateTcCorrection }: ControlsScreen
       <section className="panel">
         <div className="eyebrow">CONTROL RECORD</div>
         <h1>TIME CONTROLS</h1>
-        <p className="section-copy">Enter only the official TC time written by the marshal. The app reconstructs the TC odometer from its timestamped GPS history. The original button-press time, ODO and timing data are always retained.</p>
+        <p className="section-copy">Edit the marshal time directly. Enter HH:MM:SS or just 6 digits (HHMMSS); the ODO recalibrates automatically from GPS history. Both fields remain editable and the original capture is always retained.</p>
 
         {tcLogs.length === 0 ? (
           <p className="empty-log">No TCs recorded yet.</p>
@@ -1052,6 +1080,7 @@ function ControlsScreen({ tcLogs, sftcLogs, updateTcCorrection }: ControlsScreen
               key={log.id}
               log={log}
               isLatest={log.id === latestTcId}
+              estimateTcOdo={estimateTcOdo}
               onApply={updateTcCorrection}
             />
           ))
@@ -1078,18 +1107,44 @@ function ControlsScreen({ tcLogs, sftcLogs, updateTcCorrection }: ControlsScreen
 type TcCorrectionCardProps = {
   log: TcLog
   isLatest: boolean
-  onApply: (tcId: string, officialClockValue: string) => void
+  estimateTcOdo: (tcId: string, officialClockValue: string) => { odoKm: number } | null
+  onApply: (
+    tcId: string,
+    officialClockValue: string,
+    correctedOdoKm: number,
+    odoSource: 'gps-auto' | 'manual'
+  ) => void
 }
 
-function TcCorrectionCard({ log, isLatest, onApply }: TcCorrectionCardProps) {
+function TcCorrectionCard({ log, isLatest, estimateTcOdo, onApply }: TcCorrectionCardProps) {
   const [time, setTime] = useState(timeInputValue(effectiveTcHitMs(log)))
+  const [odo, setOdo] = useState((log.officialOdoKm ?? log.odoKm).toFixed(3))
+  const [odoSource, setOdoSource] = useState<'gps-auto' | 'manual'>(
+    log.odoCorrectionSource === 'manual' ? 'manual' : 'gps-auto'
+  )
+  const [autoOdoAvailable, setAutoOdoAvailable] = useState(true)
   const hasOfficialCorrection = log.officialHitMs !== null && log.officialHitMs !== undefined &&
     log.officialOdoKm !== null && log.officialOdoKm !== undefined
   const effectiveDeviation = effectiveTcDeviationSeconds(log)
 
   useEffect(() => {
     setTime(timeInputValue(effectiveTcHitMs(log)))
-  }, [log.hitMs, log.officialHitMs])
+    setOdo((log.officialOdoKm ?? log.odoKm).toFixed(3))
+    setOdoSource(log.odoCorrectionSource === 'manual' ? 'manual' : 'gps-auto')
+    setAutoOdoAvailable(true)
+  }, [log.hitMs, log.odoKm, log.officialHitMs, log.officialOdoKm, log.odoCorrectionSource])
+
+  const updateTimeAndAutoOdo = (nextTime: string) => {
+    setTime(nextTime)
+    const suggestion = estimateTcOdo(log.id, nextTime)
+    if (suggestion) {
+      setOdo(suggestion.odoKm.toFixed(3))
+      setOdoSource('gps-auto')
+      setAutoOdoAvailable(true)
+    } else {
+      setAutoOdoAvailable(false)
+    }
+  }
 
   return (
     <div className="tc-correction-card">
@@ -1103,19 +1158,40 @@ function TcCorrectionCard({ log, isLatest, onApply }: TcCorrectionCardProps) {
       </div>
 
       <div className="tc-correction-fields">
-        <label>OFFICIAL TC TIME
-          <input type="time" step="1" value={time} onChange={(e) => setTime(e.target.value)} />
-        </label>
-        <label>AUTO TC ODO
+        <label>TC TIME
           <input
             type="text"
-            readOnly
-            value={hasOfficialCorrection ? `${log.officialOdoKm!.toFixed(3)} km` : 'Calculated on apply'}
+            inputMode="numeric"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="HH:MM:SS"
+            value={time}
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => updateTimeAndAutoOdo(e.target.value)}
+            onBlur={() => {
+              const parsed = editableClockMs(time, log.hitMs)
+              if (parsed !== null) setTime(timeInputValue(parsed))
+            }}
+          />
+        </label>
+        <label>TC ODO km
+          <input
+            inputMode="decimal"
+            type="number"
+            step="0.001"
+            value={odo}
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => {
+              setOdo(e.target.value)
+              setOdoSource('manual')
+            }}
           />
         </label>
       </div>
 
       <div className="tc-correction-meta">
+        <span>{odoSource === 'gps-auto' ? 'ODO AUTO-CALIBRATED FROM TIME' : 'ODO MANUAL OVERRIDE'}</span>
+        {!autoOdoAvailable && <span>GPS auto ODO unavailable for this time · ODO remains editable</span>}
         {hasOfficialCorrection && <span>{formatDeviation(effectiveDeviation)} {timingState(effectiveDeviation)}</span>}
         {hasOfficialCorrection && log.correctionMethod && (
           <span>GPS {log.correctionMethod.toUpperCase()}{log.correctionGpsAccuracyM === null || log.correctionGpsAccuracyM === undefined ? '' : ` · ${Math.round(log.correctionGpsAccuracyM)} m accuracy`}</span>
@@ -1124,7 +1200,9 @@ function TcCorrectionCard({ log, isLatest, onApply }: TcCorrectionCardProps) {
         {!isLatest && <span>History edit only · live timing is anchored by the latest TC</span>}
         <span>Original capture retained</span>
       </div>
-      <button className="primary-button full-button" onClick={() => onApply(log.id, time)}>APPLY OFFICIAL TC TIME</button>
+      <button className="primary-button full-button" onClick={() => onApply(log.id, time, Number(odo), odoSource)}>
+        APPLY TC CORRECTION
+      </button>
     </div>
   )
 }
