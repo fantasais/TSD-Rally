@@ -575,7 +575,7 @@ function App() {
         />
       )}
 
-      <footer className="footer-note">Roadbook distance is the master reference. Correct the odometer whenever you have a trusted distance.</footer>
+      <footer className={`footer-note ${screen === 'rally' ? 'rally-footer' : ''}`}>Roadbook distance is the master reference. Correct the odometer whenever you have a trusted distance.</footer>
     </div>
   )
 }
@@ -701,6 +701,10 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
     setSettings((current) => ({ ...current, calibrationFactor: official / measured }))
   }
 
+  const orderedSectors = sortSectors(settings.sectors)
+  const chartRouteKm = totalRouteKm(orderedSectors)
+  const chartReady = orderedSectors.length > 0 && errors.length === 0
+
   return (
     <main className="content setup-screen">
       <section className="panel start-panel">
@@ -718,13 +722,19 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
         <div className="section-head">
           <h2>SPEED CHART</h2>
         </div>
-        <p className="section-copy">Enter the chart in distance order. Add DZ/FZ only where it appears in the official speed chart.</p>
+        <p className="section-copy">Photo import first. Review only the highlighted corrections, or enter the chart manually.</p>
 
         <SpeedChartImporter
           onLoad={(sectors) => setSettings((current) => ({ ...current, sectors }))}
         />
 
-        {sortSectors(settings.sectors).map((segment, index) => segmentKind(segment) === 'zone' ? (
+        <div className={`chart-status-strip ${chartReady ? 'ready' : 'attention'}`}>
+          <span><strong>{orderedSectors.length}</strong> ENTRIES</span>
+          <span><strong>{chartRouteKm.toFixed(3)}</strong> KM</span>
+          <b>{chartReady ? 'READY' : 'CHECK'}</b>
+        </div>
+
+        {orderedSectors.map((segment, index) => segmentKind(segment) === 'zone' ? (
           <div className="zone-entry" id={`chart-entry-${segment.id}`} key={segment.id}>
             <div className="zone-entry-head">
               <div className="zone-title-row">
@@ -965,37 +975,34 @@ function RallyScreen(props: RallyScreenProps) {
             <div className="delta-label">SECONDS {stateLabel}</div>
           </section>
 
-          <section className="target-card">
-            <div>
-              <span>{inZone ? `DZ/FZ ${currentZoneBasis === 'time' ? 'TIME' : 'SPEED'}` : 'TARGET'}</span>
-              {inZone && currentZoneBasis === 'time' ? (
-                <strong className="time-target">{formatDuration(currentSegment?.zoneDurationSeconds ?? 0)}</strong>
+          <section className="rally-data-deck">
+            <section className="target-card">
+              <div>
+                <span>{inZone ? `DZ/FZ ${currentZoneBasis === 'time' ? 'TIME' : 'SPEED'}` : 'TARGET'}</span>
+                {inZone && currentZoneBasis === 'time' ? (
+                  <strong className="time-target">{formatDuration(currentSegment?.zoneDurationSeconds ?? 0)}</strong>
+                ) : (
+                  <><strong>{targetSpeed.toFixed(1)}</strong><small>km/h</small></>
+                )}
+              </div>
+              <div><span>GPS SPEED</span><strong>{gpsSpeedKph === null ? '—' : gpsSpeedKph.toFixed(1)}</strong><small>km/h</small></div>
+            </section>
+
+            <section className="trip-card">
+              <span>ODO</span>
+              <strong>{rallyDistanceKm.toFixed(3)}</strong>
+              <small>km</small>
+            </section>
+
+            <section className="next-card">
+              <span>NEXT</span>
+              {nextChange ? (
+                <div className="next-main"><strong>{nextChange.distanceKm.toFixed(3)}</strong><small>km</small><b>→ {nextLabel}</b></div>
               ) : (
-                <><strong>{targetSpeed.toFixed(1)}</strong><small>km/h</small></>
+                <div className="next-main"><strong>END</strong><b>{remainingKm.toFixed(3)} km</b></div>
               )}
-            </div>
-            <div><span>GPS SPEED</span><strong>{gpsSpeedKph === null ? '—' : gpsSpeedKph.toFixed(1)}</strong><small>km/h</small></div>
+            </section>
           </section>
-
-          <section className="trip-card">
-            <span>RALLY ODOMETER</span>
-            <strong>{rallyDistanceKm.toFixed(3)}</strong>
-            <small>km</small>
-          </section>
-
-          <section className="next-card">
-            <span>NEXT CHART CHANGE</span>
-            {nextChange ? (
-              <div className="next-main"><strong>{nextChange.distanceKm.toFixed(3)} km</strong><b>→ {nextLabel}</b></div>
-            ) : (
-              <div className="next-main"><strong>END OF CHART</strong><b>{remainingKm.toFixed(3)} km</b></div>
-            )}
-          </section>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-            <button className="tc-button" style={{ width: '100%', margin: 0 }} onClick={markTc}>TC</button>
-            <button className="tc-button" style={{ width: '100%', margin: 0 }} onClick={markSftc} disabled={Boolean(activeSftcLog)}>SFTC</button>
-          </div>
 
           {activeSftcLog && (
             <section className="panel" style={{ textAlign: 'center' }}>
@@ -1028,15 +1035,21 @@ function RallyScreen(props: RallyScreenProps) {
             </section>
           )}
 
-          <section className="odo-controls">
-            <button onClick={() => changeOdo(-0.01)}>−10 m</button>
-            <button className="set-odo" onClick={setOdo}>SET ODO</button>
-            <button onClick={() => changeOdo(0.01)}>+10 m</button>
+          <section className="timing-strip">
+            <div><span>ACTUAL</span><strong>{clockTime(nowMs)}</strong></div>
+            <div><span>IDEAL</span><strong>{startMs === null ? '—' : clockTime(startMs + idealElapsedSeconds * 1000)}</strong></div>
           </section>
 
-          <section className="timing-strip">
-            <div><span>ACTUAL TIME</span><strong>{clockTime(nowMs)}</strong></div>
-            <div><span>IDEAL TIME</span><strong>{startMs === null ? '—' : clockTime(startMs + idealElapsedSeconds * 1000)}</strong></div>
+          <section className="rally-control-dock">
+            <div className="tc-actions">
+              <button className="tc-button" onClick={markTc}>TC</button>
+              <button className="tc-button sftc-button" onClick={markSftc} disabled={Boolean(activeSftcLog)}>SFTC</button>
+            </div>
+            <section className="odo-controls">
+              <button onClick={() => changeOdo(-0.01)}>−10 m</button>
+              <button className="set-odo" onClick={setOdo}>SET ODO</button>
+              <button onClick={() => changeOdo(0.01)}>+10 m</button>
+            </section>
           </section>
         </>
       )}
@@ -1070,7 +1083,7 @@ function ControlsScreen({ tcLogs, sftcLogs, estimateTcOdo, updateTcCorrection }:
       <section className="panel">
         <div className="eyebrow">CONTROL RECORD</div>
         <h1>TIME CONTROLS</h1>
-        <p className="section-copy">Edit the marshal time directly. Enter HH:MM:SS or just 6 digits (HHMMSS); the ODO recalibrates automatically from GPS history. Both fields remain editable and the original capture is always retained.</p>
+        <p className="section-copy controls-intro">Enter marshal time as HHMMSS or HH:MM:SS. ODO auto-recalculates from GPS and remains editable.</p>
 
         {tcLogs.length === 0 ? (
           <p className="empty-log">No TCs recorded yet.</p>
@@ -1208,4 +1221,3 @@ function TcCorrectionCard({ log, isLatest, estimateTcOdo, onApply }: TcCorrectio
 }
 
 export default App
-
