@@ -309,33 +309,3 @@ input:focus { outline: 2px solid var(--green); outline-offset: 1px; }
   .ocr-review-row > select { padding-left:3px; padding-right:2px; font-size:9px; }
   .ocr-remove-button { width:30px; height:36px; font-size:20px; }
 }
-
-
-
-/* --- TSD COCKPIT UI OVERRIDES --- */
-button {
-  user-select: none;
-  -webkit-user-select: none;
-  touch-action: manipulation;
-}
-
-/* Prevent accidental iOS double-tap zoom during rapid odo increments */
-.odo-controls button {
-  touch-action: double-tap-zoom;
-}
-
-/* Delta visual dynamic styling */
-.delta-card.late {
-  background: rgba(255, 92, 77, 0.15) !important;
-  border: 2px solid var(--red, #ff5c4d) !important;
-}
-
-.delta-card.early {
-  background: rgba(255, 186, 59, 0.15) !important;
-  border: 2px solid var(--amber, #ffba3b) !important;
-}
-
-.delta-card.on-time {
-  background: rgba(155, 226, 62, 0.15) !important;
-  border: 2px solid var(--green, #9be23e) !important;
-}
