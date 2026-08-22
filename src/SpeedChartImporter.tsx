@@ -1331,6 +1331,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
 
   const issues = useMemo(() => rows ? hardIssues(rows) : [], [rows])
   const needsCheckCount = rows?.filter((row) => row.confidence !== 'high').length ?? 0
+  const reviewReady = Boolean(rows && issues.length === 0 && needsCheckCount === 0)
 
   const scan = async (file: File) => {
     setBusy(true)
@@ -1439,10 +1440,10 @@ export default function SpeedChartImporter({ onLoad }: Props) {
 
       {rows && (
         <div className="ocr-review">
-          <div className="ocr-review-summary">
-            <strong>{rows.length} ENTRIES FOUND</strong>
-            <span className={needsCheckCount ? 'needs-check' : ''}>
-              {needsCheckCount ? `${needsCheckCount} NEED CHECK` : 'REVIEW BEFORE LOADING'}
+          <div className={`ocr-review-summary ${reviewReady ? 'ready' : 'attention'}`}>
+            <strong>{rows.length} ENTRIES</strong>
+            <span className={reviewReady ? 'ready' : 'needs-check'}>
+              {issues.length > 0 ? `${issues.length} ISSUE${issues.length === 1 ? '' : 'S'}` : needsCheckCount ? `${needsCheckCount} CHECK${needsCheckCount === 1 ? '' : 'S'}` : 'READY TO LOAD'}
             </span>
           </div>
 
@@ -1461,6 +1462,11 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                 const minutes = Math.floor(Math.max(0, row.durationSeconds) / 60)
                 const seconds = Math.max(0, row.durationSeconds) % 60
                 const needsCheck = row.confidence !== 'high'
+                const previous = index > 0 ? rows[index - 1] : null
+                const fromIssue = !Number.isFinite(row.fromKm) ||
+                  (index === 0 ? Math.abs(row.fromKm) > 0.001 : Boolean(previous && Math.abs(previous.toKm - row.fromKm) > 0.001))
+                const toIssue = !Number.isFinite(row.toKm) || !(row.toKm > row.fromKm)
+                const valueIssue = row.mode === 'zone_time' ? !(row.durationSeconds > 0) : !(row.speedKph > 0)
 
                 return (
                   <div
@@ -1475,6 +1481,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
 
                     <input
                       aria-label={`Row ${index + 1} start ODO`}
+                      className={fromIssue ? 'ocr-cell-issue' : undefined}
                       inputMode="decimal"
                       type="number"
                       step="0.001"
@@ -1485,6 +1492,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
 
                     <input
                       aria-label={`Row ${index + 1} end ODO`}
+                      className={toIssue ? 'ocr-cell-issue' : undefined}
                       inputMode="decimal"
                       type="number"
                       step="0.001"
@@ -1494,7 +1502,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                     />
 
                     {row.mode === 'zone_time' ? (
-                      <div className="ocr-time-value" aria-label={`Row ${index + 1} zone time`}>
+                      <div className={`ocr-time-value ${valueIssue ? 'ocr-cell-issue-group' : ''}`} aria-label={`Row ${index + 1} zone time`}>
                         <input
                           aria-label={`Row ${index + 1} minutes`}
                           type="number"
@@ -1527,6 +1535,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                     ) : (
                       <input
                         aria-label={`Row ${index + 1} ${row.mode === 'speed' ? 'average speed' : 'zone speed'}`}
+                        className={valueIssue ? 'ocr-cell-issue' : undefined}
                         inputMode="decimal"
                         type="number"
                         step="0.1"
