@@ -309,3 +309,172 @@ input:focus { outline: 2px solid var(--green); outline-offset: 1px; }
   .ocr-review-row > select { padding-left:3px; padding-right:2px; font-size:9px; }
   .ocr-remove-button { width:30px; height:36px; font-size:20px; }
 }
+
+/* V0.5 UI refinement: cockpit hierarchy, thumb-zone controls, faster review */
+button {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Three primary screens, equal visual weight. */
+.nav-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.nav-tabs button { min-height: 46px; }
+
+/* Setup: show chart health at a glance instead of making the navigator infer it. */
+.chart-status-strip {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0b0b0b;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: .06em;
+}
+.chart-status-strip strong { color: var(--text); font-size: 13px; font-variant-numeric: tabular-nums; }
+.chart-status-strip b { justify-self: end; font-size: 10px; letter-spacing: .08em; }
+.chart-status-strip.ready { border-color: rgba(155,226,62,.35); }
+.chart-status-strip.ready b { color: var(--green); }
+.chart-status-strip.attention { border-color: rgba(255,186,59,.38); }
+.chart-status-strip.attention b { color: var(--amber); }
+
+/* Live rally: one glance layer, one data layer, one interaction layer. */
+.rally-screen {
+  gap: 8px;
+  padding-bottom: calc(176px + env(safe-area-inset-bottom));
+}
+.rally-footer { display: none; }
+.delta-card {
+  min-height: 174px;
+  border-radius: 6px;
+  background: #090909;
+}
+.delta-number { font-size: clamp(76px, 23vw, 128px); }
+.delta-label { margin-top: 10px; font-size: 13px; }
+
+.rally-data-deck {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+.rally-data-deck .target-card { grid-column: 1 / -1; gap: 7px; }
+.rally-data-deck .trip-card,
+.rally-data-deck .next-card,
+.rally-data-deck .target-card > div {
+  border-radius: 6px;
+  padding: 10px;
+}
+.target-card span,
+.trip-card span,
+.next-card > span,
+.timing-strip span { font-size: 11px; letter-spacing: .08em; }
+.target-card strong { font-size: 39px; }
+.trip-card { text-align: left; }
+.trip-card strong { font-size: 38px; margin-top: 5px; }
+.trip-card small { font-size: 10px; }
+.next-card { min-width: 0; }
+.next-main { display: grid; grid-template-columns: auto auto 1fr; align-items: baseline; gap: 4px; margin-top: 6px; }
+.next-main strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+.next-main small { color: var(--muted); font-size: 9px; font-weight: 900; }
+.next-main b { justify-self: end; font-size: 20px; white-space: nowrap; }
+
+/* Actual/ideal time remains available, but no longer competes with driving data. */
+.timing-strip { gap: 6px; }
+.timing-strip > div { padding: 7px 9px; background: transparent; border-color: #222; }
+.timing-strip strong { margin-top: 2px; color: #bdbdbd; font-size: 14px; }
+
+/* Fixed thumb dock. TC dominates; SFTC is intentionally quieter. */
+.rally-control-dock {
+  position: fixed;
+  z-index: 28;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: min(680px, 100%);
+  padding: 8px 10px calc(9px + env(safe-area-inset-bottom));
+  border-top: 1px solid #303030;
+  background: rgba(8,8,8,.97);
+  box-shadow: 0 -10px 24px rgba(0,0,0,.42);
+}
+.tc-actions { display: grid; grid-template-columns: 1.35fr 1fr; gap: 7px; }
+.tc-button { min-height: 60px; border-radius: 6px; font-size: 27px; }
+.tc-button:not(.sftc-button) { background: var(--amber); color: #170f00; }
+.sftc-button {
+  border-color: #555;
+  background: #141414;
+  color: #e7e7e7;
+  font-size: 20px;
+  letter-spacing: .08em;
+}
+.sftc-button:active { background: #202020; }
+.rally-control-dock .odo-controls { margin-top: 7px; gap: 7px; }
+.rally-control-dock .odo-controls button { min-height: 48px; font-size: 15px; }
+.rally-control-dock .odo-controls .set-odo { background: #10160a; }
+
+/* Keep destructive session actions visually secondary during a live run. */
+.rally-actions { margin-top: 3px; }
+.rally-actions .stop-button,
+.rally-actions .ghost-button { min-height: 42px; font-size: 11px; }
+
+/* Controls: large numeric editing, less prose, faster thumb work. */
+.controls-intro { max-width: 56ch; }
+.tc-correction-card { padding: 11px; }
+.tc-correction-fields { gap: 7px; }
+.tc-correction-fields label { margin-top: 8px; font-size: 10px; letter-spacing: .07em; }
+.tc-correction-fields input {
+  min-height: 54px;
+  padding: 8px 9px;
+  font-size: 21px;
+  font-weight: 950;
+  font-variant-numeric: tabular-nums;
+}
+.tc-correction-meta { margin: 8px 0; gap: 5px 12px; font-size: 9px; }
+.tc-correction-card .full-button { min-height: 46px; margin-top: 8px; }
+
+/* OCR review: identify the actual structural cell instead of painting the whole row red. */
+.ocr-review-summary {
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0a0a0a;
+}
+.ocr-review-summary.ready { border-color: rgba(155,226,62,.38); }
+.ocr-review-summary.attention { border-color: rgba(255,186,59,.42); }
+.ocr-review-summary span.ready { color: var(--green); }
+.ocr-review-row.needs-check { background: #100e08; box-shadow: inset 2px 0 0 rgba(255,186,59,.55); }
+.ocr-cell-issue {
+  border-color: var(--red) !important;
+  box-shadow: inset 0 0 0 1px rgba(255,92,77,.28);
+  background: #190b0a !important;
+}
+.ocr-cell-issue-group input {
+  border-color: var(--red) !important;
+  background: #190b0a !important;
+}
+.ocr-issues { max-height: 116px; overflow: auto; }
+
+@media (max-width: 420px) {
+  .topbar { padding-top: calc(10px + env(safe-area-inset-top)); padding-bottom: 9px; }
+  .brand { font-size: 16px; }
+  .gps-pill { padding: 7px 8px; font-size: 11px; }
+  .nav-tabs { top: 60px; }
+  .nav-tabs button { min-height: 43px; font-size: 10px; }
+  .rally-screen { padding: 8px 8px calc(170px + env(safe-area-inset-bottom)); }
+  .delta-card { min-height: 158px; }
+  .delta-number { font-size: clamp(70px, 22vw, 110px); }
+  .target-card strong { font-size: 34px; }
+  .trip-card strong { font-size: 33px; }
+  .next-main strong { font-size: 19px; }
+  .next-main b { font-size: 18px; }
+  .rally-control-dock { padding-left: 8px; padding-right: 8px; }
+  .tc-button { min-height: 56px; }
+  .tc-correction-fields input { min-height: 50px; font-size: 19px; }
+  .chart-status-strip { grid-template-columns: 1fr 1fr auto; padding: 8px; }
+}
+.next-main b { grid-column: -2 / -1; }
+.sftc-button:disabled { opacity: .38; }
