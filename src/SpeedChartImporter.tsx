@@ -1227,12 +1227,12 @@ async function canvasToPngFile(canvas: HTMLCanvasElement, name: string) {
 async function recognizeSpeedChartPdf(file: File, onProgress?: ProgressCallback): Promise<LocalOcrRow[]> {
   onProgress?.(0.02, 'PDF selected')
   const data = new Uint8Array(await file.arrayBuffer())
-  const document = await getDocument({ data }).promise
+  const pdfDocument = await getDocument({ data }).promise
   const textRows: LocalOcrRow[] = []
 
-  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-    onProgress?.(0.04 + (pageNumber - 1) / Math.max(1, document.numPages) * 0.42, `Reading PDF page ${pageNumber}`)
-    const page = await document.getPage(pageNumber)
+  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+    onProgress?.(0.04 + (pageNumber - 1) / Math.max(1, pdfDocument.numPages) * 0.42, `Reading PDF page ${pageNumber}`)
+    const page = await pdfDocument.getPage(pageNumber)
     const content = await page.getTextContent()
     const lines = linesFromPdfTextItems(content.items as any[])
     for (const line of lines) {
@@ -1251,9 +1251,9 @@ async function recognizeSpeedChartPdf(file: File, onProgress?: ProgressCallback)
   // Scanned PDFs may contain no usable text layer. Render each page and reuse
   // the same local OCR engine already used for photographs.
   const ocrRows: LocalOcrRow[] = []
-  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
-    onProgress?.(0.08 + (pageNumber - 1) / Math.max(1, document.numPages) * 0.82, `OCR PDF page ${pageNumber}`)
-    const page = await document.getPage(pageNumber)
+  for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+    onProgress?.(0.08 + (pageNumber - 1) / Math.max(1, pdfDocument.numPages) * 0.82, `OCR PDF page ${pageNumber}`)
+    const page = await pdfDocument.getPage(pageNumber)
     const viewport = page.getViewport({ scale: 2.4 })
     const canvas = document.createElement('canvas')
     canvas.width = Math.ceil(viewport.width)
@@ -1264,15 +1264,15 @@ async function recognizeSpeedChartPdf(file: File, onProgress?: ProgressCallback)
     const imageFile = await canvasToPngFile(canvas, `${file.name}-page-${pageNumber}.png`)
     try {
       const pageRows = await recognizeSpeedChartPhoto(imageFile, (progress, status) => {
-        const pageBase = (pageNumber - 1) / Math.max(1, document.numPages)
-        const combined = 0.08 + (pageBase + progress / Math.max(1, document.numPages)) * 0.82
+        const pageBase = (pageNumber - 1) / Math.max(1, pdfDocument.numPages)
+        const combined = 0.08 + (pageBase + progress / Math.max(1, pdfDocument.numPages)) * 0.82
         onProgress?.(combined, status)
       })
       ocrRows.push(...pageRows)
     } catch {
       // Rally PDFs often include blank continuation pages. A page with no usable
       // rows is not a document failure; keep scanning the remaining pages.
-      onProgress?.(0.08 + pageNumber / Math.max(1, document.numPages) * 0.82, `Skipped blank/unreadable PDF page ${pageNumber}`)
+      onProgress?.(0.08 + pageNumber / Math.max(1, pdfDocument.numPages) * 0.82, `Skipped blank/unreadable PDF page ${pageNumber}`)
     }
   }
 
