@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { RallySession, RallySettings, SpeedSector, TcLog } from './types'
+import type { RallySession, RallySettings, SpeedSector, SftcLog, TcLog } from './types'
 import { useGpsOdometer } from './hooks/useGpsOdometer'
 import { useWakeLock } from './hooks/useWakeLock'
 import {
@@ -18,9 +18,11 @@ import {
   zoneBasis
 } from './lib/tsd'
 import { loadJson, saveJson } from './lib/storage'
+import SpeedChartImporter from './SpeedChartImporter'
+import InstallAppButton from './InstallAppButton'
 import './styles.css'
 
-type Screen = 'setup' | 'rally'
+type Screen = 'setup' | 'rally' | 'controls'
 
 // Keep V0.3 keys so an existing phone deployment retains its setup after upgrade.
 const SETTINGS_KEY = 'tsd:settings:v03'
@@ -65,6 +67,49 @@ function restartMsFromClock(clockValue: string, tcHitMs: number): number | null 
   return restart.getTime()
 }
 
+function effectiveTcHitMs(log: TcLog) {
+  return log.officialHitMs ?? log.hitMs
+}
+
+function effectiveTcOdoKm(log: TcLog) {
+  return log.officialOdoKm ?? log.odoKm
+}
+
+function effectiveTcDeviationSeconds(log: TcLog) {
+  return log.officialDeviationSeconds ?? log.deviationSeconds
+}
+
+function editableClockMs(clockValue: string, referenceMs: number): number | null {
+  const value = clockValue.trim()
+  const colonMatch = /^(\d{1,2}):(\d{2})(?::(\d{2}))?$/.exec(value)
+  const compactMatch = /^(\d{2})(\d{2})(\d{2})$/.exec(value)
+  const match = colonMatch ?? compactMatch
+  if (!match) return null
+
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  const seconds = Number(match[3] ?? 0)
+  if (hours > 23 || minutes > 59 || seconds > 59) return null
+
+  const reference = new Date(referenceMs)
+  const candidates = [-1, 0, 1].map((dayOffset) => {
+    const candidate = new Date(
+      reference.getFullYear(),
+      reference.getMonth(),
+      reference.getDate() + dayOffset,
+      hours,
+      minutes,
+      seconds,
+      0
+    )
+    return candidate.getTime()
+  })
+
+  return candidates.reduce((best, candidate) =>
+    Math.abs(candidate - referenceMs) < Math.abs(best - referenceMs) ? candidate : best
+  )
+}
+
 const DEFAULT_SETTINGS: RallySettings = {
   startDateTime: localDateTimeValue(),
   calibrationFactor: 1,
@@ -86,7 +131,9 @@ const DEFAULT_SESSION: RallySession = {
   timingAnchorIdealElapsedSeconds: 0,
   tcCount: 0,
   tcLogs: [],
-  pendingRestartTcId: null
+  sftcLogs: [],
+  pendingRestartTcId: null,
+  pendingSftcId: null
 }
 
 function App() {
@@ -94,7 +141,7 @@ function App() {
   const [settings, setSettings] = useState<RallySettings>(() => loadJson(SETTINGS_KEY, DEFAULT_SETTINGS))
   const [session, setSession] = useState<RallySession>(() => loadJson(SESSION_KEY, DEFAULT_SESSION))
   const [nowMs, setNowMs] = useState(Date.now())
-  const { gps, startGps } = useGpsOdometer()
+  const { gps, startGps, estimateRawDistanceAtMs } = useGpsOdometer()
   const wake = useWakeLock(session.status === 'armed' || session.status === 'running')
 
   const sortedSectors = useMemo(() => sortSectors(settings.sectors), [settings.sectors])
@@ -125,7 +172,9 @@ function App() {
             timingAnchorIdealElapsedSeconds: 0,
             tcCount: 0,
             tcLogs: [],
-            pendingRestartTcId: null
+            sftcLogs: [],
+            pendingRestartTcId: null,
+            pendingSftcId: null
           }
         : current)
     }
@@ -150,6 +199,7 @@ function App() {
   const routeKm = totalRouteKm(sortedSectors)
   const remainingKm = Math.max(0, routeKm - rallyDistanceKm)
   const tcLogs = session.tcLogs ?? []
+  const sftcLogs = session.sftcLogs ?? []
 
   const newRunSession = (status: RallySession['status'], startMs: number): RallySession => ({
     status,
@@ -161,7 +211,9 @@ function App() {
     timingAnchorIdealElapsedSeconds: 0,
     tcCount: 0,
     tcLogs: [],
-    pendingRestartTcId: null
+    sftcLogs: [],
+    pendingRestartTcId: null,
+    pendingSftcId: null
   })
 
   const arm = () => {
@@ -199,7 +251,7 @@ function App() {
   const endSession = () => {
     if (session.status !== 'running') return
     if (!confirm('End this rally session and freeze the session log?')) return
-    setSession((current) => ({ ...current, status: 'stopped', stopMs: Date.now(), pendingRestartTcId: null }))
+    setSession((current) => ({ ...current, status: 'stopped', stopMs: Date.now(), pendingRestartTcId: null, pendingSftcId: null }))
   }
 
   const changeOdo = (deltaKm: number) => {
@@ -242,7 +294,21 @@ function App() {
       lat: point?.lat ?? null,
       lon: point?.lon ?? null,
       officialRestartMs: null,
-      scratchOverridden: false
+      scratchOverridden: false,
+      previousAnchorDistanceKm: session.timingAnchorDistanceKm,
+      previousAnchorIdealElapsedSeconds: session.timingAnchorIdealElapsedSeconds,
+      capturedRawDistanceKm: gps.rawDistanceKm,
+      calibrationFactorAtHit: settings.calibrationFactor,
+      officialHitMs: null,
+      officialOdoKm: null,
+      officialRawDistanceKm: null,
+      officialActualElapsedSeconds: null,
+      officialIdealElapsedSeconds: null,
+      officialDeviationSeconds: null,
+      correctionMethod: null,
+      correctionGpsAccuracyM: null,
+      correctionLat: null,
+      correctionLon: null
     }
 
     setSession((current) => ({
@@ -257,18 +323,115 @@ function App() {
     if ('vibrate' in navigator) navigator.vibrate?.(60)
   }
 
+  const estimateTcOdoFromOfficialTime = (tcId: string, officialClockValue: string) => {
+    const tc = tcLogs.find((log) => log.id === tcId)
+    if (!tc) return null
+
+    const officialHitMs = editableClockMs(officialClockValue, tc.hitMs)
+    if (officialHitMs === null) return null
+
+    const officialEstimate = estimateRawDistanceAtMs(officialHitMs)
+    const capturedEstimate = tc.capturedRawDistanceKm === undefined
+      ? estimateRawDistanceAtMs(tc.hitMs)
+      : null
+    const capturedRawDistanceKm = tc.capturedRawDistanceKm ?? capturedEstimate?.rawDistanceKm ?? null
+
+    if (!officialEstimate || capturedRawDistanceKm === null) return null
+
+    const calibrationAtHit = tc.calibrationFactorAtHit ?? settings.calibrationFactor
+    const odoKm = Math.max(
+      0,
+      tc.odoKm + (officialEstimate.rawDistanceKm - capturedRawDistanceKm) * calibrationAtHit
+    )
+
+    return { odoKm, officialHitMs, estimate: officialEstimate }
+  }
+
+  const updateTcCorrection = (
+    tcId: string,
+    officialClockValue: string,
+    correctedOdoKm: number,
+    odoSource: 'gps-auto' | 'manual'
+  ) => {
+    if (session.startMs === null) return
+
+    const tcIndex = tcLogs.findIndex((log) => log.id === tcId)
+    if (tcIndex < 0) return
+
+    const tc = tcLogs[tcIndex]
+    const officialHitMs = editableClockMs(officialClockValue, tc.hitMs)
+    if (officialHitMs === null) {
+      alert('Enter a valid TC time as HH:MM:SS.')
+      return
+    }
+    if (!Number.isFinite(correctedOdoKm) || correctedOdoKm < 0) {
+      alert('Enter a valid TC odometer.')
+      return
+    }
+
+    const autoSuggestion = estimateTcOdoFromOfficialTime(tcId, officialClockValue)
+
+    const previousAnchorDistanceKm = tc.previousAnchorDistanceKm ?? 0
+    const previousAnchorIdealElapsedSeconds = tc.previousAnchorIdealElapsedSeconds ?? 0
+    const officialActualElapsedSeconds = Math.max(0, (officialHitMs - session.startMs) / 1000)
+    const officialIdealElapsedSeconds = idealElapsedSecondsFromAnchor(
+      correctedOdoKm,
+      sortedSectors,
+      previousAnchorDistanceKm,
+      previousAnchorIdealElapsedSeconds
+    )
+    const officialDeviationSeconds = deviationSeconds(officialActualElapsedSeconds, officialIdealElapsedSeconds)
+    const isLatestTc = tcIndex === tcLogs.length - 1
+    const effectiveOdoSource: 'gps-auto' | 'manual' = odoSource === 'gps-auto' && autoSuggestion ? 'gps-auto' : 'manual'
+
+    setSession((current) => {
+      const nextLogs = (current.tcLogs ?? []).map((log) => log.id === tcId
+        ? {
+            ...log,
+            officialHitMs,
+            officialOdoKm: correctedOdoKm,
+            officialRawDistanceKm: autoSuggestion?.estimate.rawDistanceKm ?? null,
+            officialActualElapsedSeconds,
+            officialIdealElapsedSeconds,
+            officialDeviationSeconds,
+            correctionMethod: autoSuggestion?.estimate.method ?? null,
+            correctionGpsAccuracyM: autoSuggestion?.estimate.accuracyM ?? null,
+            correctionLat: autoSuggestion?.estimate.lat ?? null,
+            correctionLon: autoSuggestion?.estimate.lon ?? null,
+            odoCorrectionSource: effectiveOdoSource
+          }
+        : log)
+
+      if (!isLatestTc) return { ...current, tcLogs: nextLogs }
+
+      const liveAnchorIdealElapsedSeconds = tc.officialRestartMs
+        ? Math.max(0, (tc.officialRestartMs - session.startMs!) / 1000)
+        : officialActualElapsedSeconds + tc.scratchSeconds
+
+      return {
+        ...current,
+        tcLogs: nextLogs,
+        timingAnchorDistanceKm: correctedOdoKm,
+        timingAnchorIdealElapsedSeconds: liveAnchorIdealElapsedSeconds
+      }
+    })
+
+    if ('vibrate' in navigator) navigator.vibrate?.(40)
+  }
+
   const applyOfficialRestart = (tcId: string, clockValue: string) => {
     if (session.status !== 'running' || session.startMs === null) return
 
     const tc = tcLogs.find((log) => log.id === tcId)
     if (!tc) return
 
-    const restartMs = restartMsFromClock(clockValue, tc.hitMs)
+    const tcArrivalMs = effectiveTcHitMs(tc)
+    const restartMs = restartMsFromClock(clockValue, tcArrivalMs)
     if (restartMs === null) {
       alert('Enter a valid official restart time.')
       return
     }
-    if (restartMs < tc.hitMs) {
+    if (restartMs < tcArrivalMs) {
       alert('Official restart time cannot be before the TC arrival time.')
       return
     }
@@ -277,7 +440,7 @@ function App() {
 
     setSession((current) => ({
       ...current,
-      timingAnchorDistanceKm: tc.odoKm,
+      timingAnchorDistanceKm: effectiveTcOdoKm(tc),
       timingAnchorIdealElapsedSeconds: anchorElapsedSeconds,
       pendingRestartTcId: null,
       tcLogs: (current.tcLogs ?? []).map((log) => log.id === tcId
@@ -292,21 +455,67 @@ function App() {
     setSession((current) => ({ ...current, pendingRestartTcId: null }))
   }
 
+  const markSftc = () => {
+    if (session.status !== 'running' || session.startMs === null) return
+
+    const hitMs = Date.now()
+    const hitElapsedSeconds = Math.max(0, (hitMs - session.startMs) / 1000)
+    const hitIdealElapsedSeconds = idealElapsedSecondsFromAnchor(
+      rallyDistanceKm,
+      sortedSectors,
+      session.timingAnchorDistanceKm,
+      session.timingAnchorIdealElapsedSeconds
+    )
+    const hitDeviationSeconds = deviationSeconds(hitElapsedSeconds, hitIdealElapsedSeconds)
+    const point = gps.lastAcceptedPoint
+    const cardTimeMs = Math.floor((session.startMs + hitIdealElapsedSeconds * 1000) / 1000) * 1000
+
+    const log: SftcLog = {
+      id: crypto.randomUUID(),
+      number: sftcLogs.length + 1,
+      hitMs,
+      cardTimeMs,
+      odoKm: rallyDistanceKm,
+      deviationSeconds: hitDeviationSeconds,
+      actualElapsedSeconds: hitElapsedSeconds,
+      idealElapsedSeconds: hitIdealElapsedSeconds,
+      gpsAccuracyM: gps.accuracyM,
+      lat: point?.lat ?? null,
+      lon: point?.lon ?? null
+    }
+
+    setSession((current) => ({
+      ...current,
+      sftcLogs: [...(current.sftcLogs ?? []), log],
+      pendingSftcId: log.id
+    }))
+
+    if ('vibrate' in navigator) navigator.vibrate?.([60, 40, 60])
+  }
+
+  const dismissSftc = () => {
+    setSession((current) => ({ ...current, pendingSftcId: null }))
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <div className="eyebrow">TSD RALLY V0.4</div>
+          <div className="eyebrow">TSD RALLY V0.5</div>
           <div className="brand">RALLY COMPUTER</div>
         </div>
-        <div className={`gps-pill ${gps.accuracyM !== null && gps.accuracyM <= 15 ? 'good' : gps.accuracyM !== null && gps.accuracyM <= 30 ? 'fair' : 'poor'}`}>
-          GPS {gps.enabled ? (gps.accuracyM === null ? '…' : `${Math.round(gps.accuracyM)}m`) : 'OFF'}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <InstallAppButton />
+          <div className={`gps-pill ${gps.accuracyM !== null && gps.accuracyM <= 15 ? 'good' : gps.accuracyM !== null && gps.accuracyM <= 30 ? 'fair' : 'poor'}`}>
+            GPS {gps.enabled ? (gps.accuracyM === null ? '…' : `${Math.round(gps.accuracyM)}m`) : 'OFF'}
+          </div>
         </div>
       </header>
 
       <nav className="nav-tabs" aria-label="Main screens">
         <button className={screen === 'setup' ? 'active' : ''} onClick={() => setScreen('setup')}>SETUP</button>
         <button className={screen === 'rally' ? 'active' : ''} onClick={() => setScreen('rally')}>RALLY</button>
+        <button className={screen === 'controls' ? 'active' : ''} onClick={() => setScreen('controls')}>CONTROLS</button>
       </nav>
 
       {screen === 'setup' && (
@@ -340,7 +549,9 @@ function App() {
           wakeHeld={wake.held}
           wakeSupported={wake.supported}
           tcLogs={tcLogs}
+          sftcLogs={sftcLogs}
           pendingRestartTcId={session.pendingRestartTcId ?? null}
+          pendingSftcId={session.pendingSftcId ?? null}
           arm={arm}
           startNow={startNow}
           endSession={endSession}
@@ -348,12 +559,23 @@ function App() {
           changeOdo={changeOdo}
           setOdo={setOdo}
           markTc={markTc}
+          markSftc={markSftc}
           applyOfficialRestart={applyOfficialRestart}
           dismissRestartOption={dismissRestartOption}
+          dismissSftc={dismissSftc}
         />
       )}
 
-      <footer className="footer-note">Roadbook distance is the master reference. Correct the odometer whenever you have a trusted distance.</footer>
+      {screen === 'controls' && (
+        <ControlsScreen
+          tcLogs={tcLogs}
+          sftcLogs={sftcLogs}
+          estimateTcOdo={estimateTcOdoFromOfficialTime}
+          updateTcCorrection={updateTcCorrection}
+        />
+      )}
+
+      <footer className={`footer-note ${screen === 'rally' ? 'rally-footer' : ''}`}>Roadbook distance is the master reference. Correct the odometer whenever you have a trusted distance.</footer>
     </div>
   )
 }
@@ -382,19 +604,51 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
     updateSegment(id, { [field]: Number(value) })
   }
 
+  const revealNewEntry = (id: string) => {
+    // Wait for React to render the new row, then keep the navigator at the latest entry.
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        const entry = document.getElementById(`chart-entry-${id}`)
+        entry?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        const input = entry?.querySelector<HTMLInputElement>('[data-new-entry-focus="true"]')
+        input?.focus()
+        input?.select()
+      })
+    })
+  }
+
   const addSector = () => {
+    const id = crypto.randomUUID()
     setSettings((current) => {
       const sorted = sortSectors(current.sectors)
       const last = sorted[sorted.length - 1]
       const from = last?.toKm ?? 0
       return {
         ...current,
-        sectors: [...sorted, { id: crypto.randomUUID(), fromKm: from, toKm: from + 5, speedKph: 30, kind: 'speed' }]
+        sectors: [...sorted, { id, fromKm: from, toKm: from + 5, speedKph: 30, kind: 'speed' }]
       }
     })
+    revealNewEntry(id)
+  }
+
+  const addNextSpeedOnEnter = (event: React.KeyboardEvent<HTMLInputElement>, segmentId: string) => {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+
+    const sorted = sortSectors(settings.sectors)
+    const index = sorted.findIndex((segment) => segment.id === segmentId)
+    if (index !== sorted.length - 1) {
+      const next = sorted[index + 1]
+      const nextEntry = next ? document.getElementById(`chart-entry-${next.id}`) : null
+      nextEntry?.querySelector<HTMLInputElement>('[data-new-entry-focus="true"]')?.focus()
+      return
+    }
+
+    addSector()
   }
 
   const addZone = () => {
+    const id = crypto.randomUUID()
     setSettings((current) => {
       const sorted = sortSectors(current.sectors)
       const last = sorted[sorted.length - 1]
@@ -402,7 +656,7 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
       return {
         ...current,
         sectors: [...sorted, {
-          id: crypto.randomUUID(),
+          id,
           fromKm: from,
           toKm: from + 2,
           speedKph: 20,
@@ -413,6 +667,7 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
         }]
       }
     })
+    revealNewEntry(id)
   }
 
   const removeSector = (id: string) => {
@@ -446,6 +701,10 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
     setSettings((current) => ({ ...current, calibrationFactor: official / measured }))
   }
 
+  const orderedSectors = sortSectors(settings.sectors)
+  const chartRouteKm = totalRouteKm(orderedSectors)
+  const chartReady = orderedSectors.length > 0 && errors.length === 0
+
   return (
     <main className="content setup-screen">
       <section className="panel start-panel">
@@ -462,15 +721,21 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
       <section className="panel speed-chart-panel">
         <div className="section-head">
           <h2>SPEED CHART</h2>
-          <div className="chart-add-buttons">
-            <button className="small-button" onClick={addSector}>+ SPEED</button>
-            <button className="small-button zone-add" onClick={addZone}>+ DZ/FZ</button>
-          </div>
         </div>
-        <p className="section-copy">Enter the chart in distance order. Add DZ/FZ only where it appears in the official speed chart.</p>
+        <p className="section-copy">Photo import first. Review only the highlighted corrections, or enter the chart manually.</p>
 
-        {sortSectors(settings.sectors).map((segment, index) => segmentKind(segment) === 'zone' ? (
-          <div className="zone-entry" key={segment.id}>
+        <SpeedChartImporter
+          onLoad={(sectors) => setSettings((current) => ({ ...current, sectors }))}
+        />
+
+        <div className={`chart-status-strip ${chartReady ? 'ready' : 'attention'}`}>
+          <span><strong>{orderedSectors.length}</strong> ENTRIES</span>
+          <span><strong>{chartRouteKm.toFixed(3)}</strong> KM</span>
+          <b>{chartReady ? 'READY' : 'CHECK'}</b>
+        </div>
+
+        {orderedSectors.map((segment, index) => segmentKind(segment) === 'zone' ? (
+          <div className="zone-entry" id={`chart-entry-${segment.id}`} key={segment.id}>
             <div className="zone-entry-head">
               <div className="zone-title-row">
                 <strong>DZ/FZ</strong>
@@ -480,7 +745,7 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
 
             <div className="zone-distance-grid">
               <label>FROM km<input inputMode="decimal" type="number" step="0.001" value={segment.fromKm} onChange={(e) => updateNumber(segment.id, 'fromKm', e.target.value)} /></label>
-              <label>TO km<input inputMode="decimal" type="number" step="0.001" value={segment.toKm} onChange={(e) => updateNumber(segment.id, 'toKm', e.target.value)} /></label>
+              <label>TO km<input data-new-entry-focus="true" inputMode="decimal" type="number" step="0.001" value={segment.toKm} onChange={(e) => updateNumber(segment.id, 'toKm', e.target.value)} /></label>
             </div>
 
             <div className="zone-basis-toggle">
@@ -490,26 +755,32 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
 
             {zoneBasis(segment) === 'speed' ? (
               <label className="zone-value-field">ZONE SPEED km/h
-                <input inputMode="decimal" type="number" step="0.1" value={segment.speedKph} onChange={(e) => updateNumber(segment.id, 'speedKph', e.target.value)} />
+                <input inputMode="decimal" type="number" step="0.1" value={segment.speedKph} onChange={(e) => updateNumber(segment.id, 'speedKph', e.target.value)} onKeyDown={(e) => addNextSpeedOnEnter(e, segment.id)} />
               </label>
             ) : (
               <div className="zone-time-fields">
                 <label>MIN<input type="number" min="0" step="1" value={Math.floor(Math.max(0, segment.zoneDurationSeconds ?? 0) / 60)} onChange={(e) => setZoneMinutes(segment, Number(e.target.value))} /></label>
-                <label>SEC<input type="number" min="0" max="59" step="1" value={Math.max(0, segment.zoneDurationSeconds ?? 0) % 60} onChange={(e) => setZoneSecondsPart(segment, Number(e.target.value))} /></label>
+                <label>SEC<input type="number" min="0" max="59" step="1" value={Math.max(0, segment.zoneDurationSeconds ?? 0) % 60} onChange={(e) => setZoneSecondsPart(segment, Number(e.target.value))} onKeyDown={(e) => addNextSpeedOnEnter(e, segment.id)} /></label>
               </div>
             )}
           </div>
         ) : (
-          <div className="speed-entry" key={segment.id}>
+          <div className="speed-entry" id={`chart-entry-${segment.id}`} key={segment.id}>
             <div className="speed-entry-label">SPEED {String(index + 1).padStart(2, '0')}</div>
             <div className="sector-row">
               <label>FROM km<input inputMode="decimal" type="number" step="0.001" value={segment.fromKm} onChange={(e) => updateNumber(segment.id, 'fromKm', e.target.value)} /></label>
-              <label>TO km<input inputMode="decimal" type="number" step="0.001" value={segment.toKm} onChange={(e) => updateNumber(segment.id, 'toKm', e.target.value)} /></label>
-              <label>AVG km/h<input inputMode="decimal" type="number" step="0.1" value={segment.speedKph} onChange={(e) => updateNumber(segment.id, 'speedKph', e.target.value)} /></label>
+              <label>TO km<input data-new-entry-focus="true" inputMode="decimal" type="number" step="0.001" value={segment.toKm} onChange={(e) => updateNumber(segment.id, 'toKm', e.target.value)} /></label>
+              <label>AVG km/h<input inputMode="decimal" type="number" step="0.1" value={segment.speedKph} onChange={(e) => updateNumber(segment.id, 'speedKph', e.target.value)} onKeyDown={(e) => addNextSpeedOnEnter(e, segment.id)} /></label>
               <button className="delete-button" aria-label="Delete speed entry" onClick={() => removeSector(segment.id)}>×</button>
             </div>
           </div>
         ))}
+
+        <div className="chart-add-buttons">
+          <button className="small-button" onClick={addSector}>+ SPEED</button>
+          <button className="small-button zone-add" onClick={addZone}>+ DZ/FZ</button>
+        </div>
+
         {errors.length > 0 && <div className="error-box">{errors.map((error) => <div key={error}>{error}</div>)}</div>}
       </section>
 
@@ -559,7 +830,9 @@ type RallyScreenProps = {
   wakeHeld: boolean
   wakeSupported: boolean
   tcLogs: TcLog[]
+  sftcLogs: SftcLog[]
   pendingRestartTcId: string | null
+  pendingSftcId: string | null
   arm: () => void
   startNow: () => void
   endSession: () => void
@@ -567,8 +840,10 @@ type RallyScreenProps = {
   changeOdo: (deltaKm: number) => void
   setOdo: () => void
   markTc: () => void
+  markSftc: () => void
   applyOfficialRestart: (tcId: string, clockValue: string) => void
   dismissRestartOption: () => void
+  dismissSftc: () => void
 }
 
 function timingState(seconds: number) {
@@ -585,12 +860,13 @@ function clockTime(ms: number | null) {
 function RallyScreen(props: RallyScreenProps) {
   const {
     status, startMs, stopMs, nowMs, deltaSeconds, targetSpeed, currentSegment, rallyDistanceKm, remainingKm, nextChange,
-    actualElapsedSeconds, idealElapsedSeconds, gpsSpeedKph, gpsEnabled, gpsError, wakeHeld, wakeSupported, tcLogs,
-    pendingRestartTcId, arm, startNow, endSession, resetRun, changeOdo, setOdo, markTc,
-    applyOfficialRestart, dismissRestartOption
+    actualElapsedSeconds, idealElapsedSeconds, gpsSpeedKph, gpsEnabled, gpsError, wakeHeld, wakeSupported, tcLogs, sftcLogs,
+    pendingRestartTcId, pendingSftcId, arm, startNow, endSession, resetRun, changeOdo, setOdo, markTc, markSftc,
+    applyOfficialRestart, dismissRestartOption, dismissSftc
   } = props
 
   const activeTcLog = pendingRestartTcId ? (tcLogs.find((log) => log.id === pendingRestartTcId) ?? null) : null
+  const activeSftcLog = pendingSftcId ? (sftcLogs.find((log) => log.id === pendingSftcId) ?? null) : null
   const [restartTime, setRestartTime] = useState('')
 
   useEffect(() => {
@@ -625,7 +901,7 @@ function RallyScreen(props: RallyScreenProps) {
           <div className="summary-grid">
             <div><span>DISTANCE</span><strong>{rallyDistanceKm.toFixed(3)}</strong><small>km</small></div>
             <div><span>ELAPSED</span><strong>{formatElapsed(actualElapsedSeconds)}</strong></div>
-            <div><span>TCs</span><strong>{tcLogs.length}</strong></div>
+            <div><span>CONTROLS</span><strong>{tcLogs.length} / {sftcLogs.length}</strong><small>TC / SFTC</small></div>
             <div><span>FINAL</span><strong>{formatDeviation(deltaSeconds)}</strong><small>{stateLabel}</small></div>
           </div>
           <div className="session-times"><span>START {clockTime(startMs)}</span><span>END {clockTime(stopMs)}</span></div>
@@ -638,13 +914,32 @@ function RallyScreen(props: RallyScreenProps) {
           ) : tcLogs.map((log) => (
             <div className="tc-log-row" key={log.id}>
               <div className="tc-log-number">TC {String(log.number).padStart(2, '0')}</div>
-              <div><span>ODO</span><strong>{log.odoKm.toFixed(3)} km</strong></div>
-              <div><span>TIME</span><strong>{clockTime(log.hitMs)}</strong></div>
-              <div><span>STATUS</span><strong>{formatDeviation(log.deviationSeconds)} {timingState(log.deviationSeconds)}</strong></div>
+              <div><span>{log.officialOdoKm !== null && log.officialOdoKm !== undefined ? 'AUTO ODO' : 'ODO'}</span><strong>{effectiveTcOdoKm(log).toFixed(3)} km</strong></div>
+              <div><span>{log.officialHitMs ? 'OFFICIAL TIME' : 'TIME'}</span><strong>{clockTime(effectiveTcHitMs(log))}</strong></div>
+              <div><span>STATUS</span><strong>{formatDeviation(effectiveTcDeviationSeconds(log))} {timingState(effectiveTcDeviationSeconds(log))}</strong></div>
+              {log.officialHitMs && (
+                <div><span>ORIGINAL CAPTURE</span><strong>{clockTime(log.hitMs)} · {log.odoKm.toFixed(3)} km</strong></div>
+              )}
               <div>
                 <span>{log.officialRestartMs ? 'RESTART' : 'SCRATCH'}</span>
                 <strong>{log.officialRestartMs ? `${clockTime(log.officialRestartMs)} · SCRATCH OVERRIDDEN` : formatDuration(log.scratchSeconds)}</strong>
               </div>
+              <div><span>GPS</span><strong>{log.gpsAccuracyM === null ? '—' : `${Math.round(log.gpsAccuracyM)} m`}</strong></div>
+            </div>
+          ))}
+        </section>
+
+        <section className="panel tc-log-panel">
+          <h2>SELF TIME CONTROLS</h2>
+          {sftcLogs.length === 0 ? (
+            <p className="empty-log">No SFTCs were marked in this session.</p>
+          ) : sftcLogs.map((log) => (
+            <div className="tc-log-row" key={log.id}>
+              <div className="tc-log-number">SFTC {String(log.number).padStart(2, '0')}</div>
+              <div><span>ODO</span><strong>{log.odoKm.toFixed(3)} km</strong></div>
+              <div><span>WRITE</span><strong>{clockTime(log.cardTimeMs)}</strong></div>
+              <div><span>ACTUAL</span><strong>{clockTime(log.hitMs)}</strong></div>
+              <div><span>STATUS</span><strong>{formatDeviation(log.deviationSeconds)} {timingState(log.deviationSeconds)}</strong></div>
               <div><span>GPS</span><strong>{log.gpsAccuracyM === null ? '—' : `${Math.round(log.gpsAccuracyM)} m`}</strong></div>
             </div>
           ))}
@@ -680,34 +975,50 @@ function RallyScreen(props: RallyScreenProps) {
             <div className="delta-label">SECONDS {stateLabel}</div>
           </section>
 
-          <section className="target-card">
-            <div>
-              <span>{inZone ? `DZ/FZ ${currentZoneBasis === 'time' ? 'TIME' : 'SPEED'}` : 'TARGET'}</span>
-              {inZone && currentZoneBasis === 'time' ? (
-                <strong className="time-target">{formatDuration(currentSegment?.zoneDurationSeconds ?? 0)}</strong>
+          <section className="rally-data-deck">
+            <section className="target-card">
+              <div>
+                <span>{inZone ? `DZ/FZ ${currentZoneBasis === 'time' ? 'TIME' : 'SPEED'}` : 'TARGET'}</span>
+                {inZone && currentZoneBasis === 'time' ? (
+                  <strong className="time-target">{formatDuration(currentSegment?.zoneDurationSeconds ?? 0)}</strong>
+                ) : (
+                  <><strong>{targetSpeed.toFixed(1)}</strong><small>km/h</small></>
+                )}
+              </div>
+              <div><span>GPS SPEED</span><strong>{gpsSpeedKph === null ? '—' : gpsSpeedKph.toFixed(1)}</strong><small>km/h</small></div>
+            </section>
+
+            <section className="trip-card">
+              <span>ODO</span>
+              <strong>{rallyDistanceKm.toFixed(3)}</strong>
+              <small>km</small>
+            </section>
+
+            <section className="next-card">
+              <span>NEXT</span>
+              {nextChange ? (
+                <div className="next-main"><strong>{nextChange.distanceKm.toFixed(3)}</strong><small>km</small><b>→ {nextLabel}</b></div>
               ) : (
-                <><strong>{targetSpeed.toFixed(1)}</strong><small>km/h</small></>
+                <div className="next-main"><strong>END</strong><b>{remainingKm.toFixed(3)} km</b></div>
               )}
-            </div>
-            <div><span>GPS SPEED</span><strong>{gpsSpeedKph === null ? '—' : gpsSpeedKph.toFixed(1)}</strong><small>km/h</small></div>
+            </section>
           </section>
 
-          <section className="trip-card">
-            <span>RALLY ODOMETER</span>
-            <strong>{rallyDistanceKm.toFixed(3)}</strong>
-            <small>km</small>
-          </section>
-
-          <section className="next-card">
-            <span>NEXT CHART CHANGE</span>
-            {nextChange ? (
-              <div className="next-main"><strong>{nextChange.distanceKm.toFixed(3)} km</strong><b>→ {nextLabel}</b></div>
-            ) : (
-              <div className="next-main"><strong>END OF CHART</strong><b>{remainingKm.toFixed(3)} km</b></div>
-            )}
-          </section>
-
-          <button className="tc-button" onClick={markTc}>TC</button>
+          {activeSftcLog && (
+            <section className="panel" style={{ textAlign: 'center' }}>
+              <div className="eyebrow">SFTC {String(activeSftcLog.number).padStart(2, '0')} RECORDED</div>
+              <h2 style={{ marginBottom: '8px' }}>WRITE</h2>
+              <div style={{ fontSize: '3.2rem', lineHeight: 1, fontWeight: 900, letterSpacing: '0.02em', margin: '10px 0 18px' }}>
+                {clockTime(activeSftcLog.cardTimeMs)}
+              </div>
+              <div className="session-times" style={{ justifyContent: 'center', gap: '16px', flexWrap: 'wrap' }}>
+                <span>ODO {activeSftcLog.odoKm.toFixed(3)} km</span>
+                <span>ACTUAL {clockTime(activeSftcLog.hitMs)}</span>
+                <span>{formatDeviation(activeSftcLog.deviationSeconds)} {timingState(activeSftcLog.deviationSeconds)}</span>
+              </div>
+              <button className="primary-button full-button" style={{ marginTop: '16px' }} onClick={dismissSftc}>OK</button>
+            </section>
+          )}
 
           {activeTcLog && (
             <section className="panel">
@@ -724,15 +1035,21 @@ function RallyScreen(props: RallyScreenProps) {
             </section>
           )}
 
-          <section className="odo-controls">
-            <button onClick={() => changeOdo(-0.01)}>−10 m</button>
-            <button className="set-odo" onClick={setOdo}>SET ODO</button>
-            <button onClick={() => changeOdo(0.01)}>+10 m</button>
+          <section className="timing-strip">
+            <div><span>ACTUAL</span><strong>{clockTime(nowMs)}</strong></div>
+            <div><span>IDEAL</span><strong>{startMs === null ? '—' : clockTime(startMs + idealElapsedSeconds * 1000)}</strong></div>
           </section>
 
-          <section className="timing-strip">
-            <div><span>ACTUAL</span><strong>{formatElapsed(actualElapsedSeconds)}</strong></div>
-            <div><span>IDEAL</span><strong>{formatElapsed(idealElapsedSeconds)}</strong></div>
+          <section className="rally-control-dock">
+            <div className="tc-actions">
+              <button className="tc-button" onClick={markTc}>TC</button>
+              <button className="tc-button sftc-button" onClick={markSftc} disabled={Boolean(activeSftcLog)}>SFTC</button>
+            </div>
+            <section className="odo-controls">
+              <button onClick={() => changeOdo(-0.01)}>−10 m</button>
+              <button className="set-odo" onClick={setOdo}>SET ODO</button>
+              <button onClick={() => changeOdo(0.01)}>+10 m</button>
+            </section>
           </section>
         </>
       )}
@@ -743,6 +1060,163 @@ function RallyScreen(props: RallyScreenProps) {
         <button className="ghost-button" onClick={resetRun}>RESET RUN</button>
       </div>
     </main>
+  )
+}
+
+type ControlsScreenProps = {
+  tcLogs: TcLog[]
+  sftcLogs: SftcLog[]
+  estimateTcOdo: (tcId: string, officialClockValue: string) => { odoKm: number } | null
+  updateTcCorrection: (
+    tcId: string,
+    officialClockValue: string,
+    correctedOdoKm: number,
+    odoSource: 'gps-auto' | 'manual'
+  ) => void
+}
+
+function ControlsScreen({ tcLogs, sftcLogs, estimateTcOdo, updateTcCorrection }: ControlsScreenProps) {
+  const latestTcId = tcLogs.length ? tcLogs[tcLogs.length - 1].id : null
+
+  return (
+    <main className="content controls-screen">
+      <section className="panel">
+        <div className="eyebrow">CONTROL RECORD</div>
+        <h1>TIME CONTROLS</h1>
+        <p className="section-copy controls-intro">Enter marshal time as HHMMSS or HH:MM:SS. ODO auto-recalculates from GPS and remains editable.</p>
+
+        {tcLogs.length === 0 ? (
+          <p className="empty-log">No TCs recorded yet.</p>
+        ) : (
+          [...tcLogs].reverse().map((log) => (
+            <TcCorrectionCard
+              key={log.id}
+              log={log}
+              isLatest={log.id === latestTcId}
+              estimateTcOdo={estimateTcOdo}
+              onApply={updateTcCorrection}
+            />
+          ))
+        )}
+      </section>
+
+      {sftcLogs.length > 0 && (
+        <section className="panel tc-log-panel">
+          <h2>SFTC RECORD</h2>
+          {sftcLogs.map((log) => (
+            <div className="tc-log-row" key={log.id}>
+              <div className="tc-log-number">SFTC {String(log.number).padStart(2, '0')}</div>
+              <div><span>ODO</span><strong>{log.odoKm.toFixed(3)} km</strong></div>
+              <div><span>WRITE</span><strong>{clockTime(log.cardTimeMs)}</strong></div>
+              <div><span>ACTUAL</span><strong>{clockTime(log.hitMs)}</strong></div>
+            </div>
+          ))}
+        </section>
+      )}
+    </main>
+  )
+}
+
+type TcCorrectionCardProps = {
+  log: TcLog
+  isLatest: boolean
+  estimateTcOdo: (tcId: string, officialClockValue: string) => { odoKm: number } | null
+  onApply: (
+    tcId: string,
+    officialClockValue: string,
+    correctedOdoKm: number,
+    odoSource: 'gps-auto' | 'manual'
+  ) => void
+}
+
+function TcCorrectionCard({ log, isLatest, estimateTcOdo, onApply }: TcCorrectionCardProps) {
+  const [time, setTime] = useState(timeInputValue(effectiveTcHitMs(log)))
+  const [odo, setOdo] = useState((log.officialOdoKm ?? log.odoKm).toFixed(3))
+  const [odoSource, setOdoSource] = useState<'gps-auto' | 'manual'>(
+    log.odoCorrectionSource === 'manual' ? 'manual' : 'gps-auto'
+  )
+  const [autoOdoAvailable, setAutoOdoAvailable] = useState(true)
+  const hasOfficialCorrection = log.officialHitMs !== null && log.officialHitMs !== undefined &&
+    log.officialOdoKm !== null && log.officialOdoKm !== undefined
+  const effectiveDeviation = effectiveTcDeviationSeconds(log)
+
+  useEffect(() => {
+    setTime(timeInputValue(effectiveTcHitMs(log)))
+    setOdo((log.officialOdoKm ?? log.odoKm).toFixed(3))
+    setOdoSource(log.odoCorrectionSource === 'manual' ? 'manual' : 'gps-auto')
+    setAutoOdoAvailable(true)
+  }, [log.hitMs, log.odoKm, log.officialHitMs, log.officialOdoKm, log.odoCorrectionSource])
+
+  const updateTimeAndAutoOdo = (nextTime: string) => {
+    setTime(nextTime)
+    const suggestion = estimateTcOdo(log.id, nextTime)
+    if (suggestion) {
+      setOdo(suggestion.odoKm.toFixed(3))
+      setOdoSource('gps-auto')
+      setAutoOdoAvailable(true)
+    } else {
+      setAutoOdoAvailable(false)
+    }
+  }
+
+  return (
+    <div className="tc-correction-card">
+      <div className="tc-correction-head">
+        <strong>TC {String(log.number).padStart(2, '0')}</strong>
+        <span>{isLatest ? 'LIVE ANCHOR' : 'HISTORY'}</span>
+      </div>
+
+      <div className="tc-correction-meta">
+        <span>CAPTURED {clockTime(log.hitMs)} · {log.odoKm.toFixed(3)} km</span>
+      </div>
+
+      <div className="tc-correction-fields">
+        <label>TC TIME
+          <input
+            type="text"
+            inputMode="numeric"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="HH:MM:SS"
+            value={time}
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => updateTimeAndAutoOdo(e.target.value)}
+            onBlur={() => {
+              const parsed = editableClockMs(time, log.hitMs)
+              if (parsed !== null) setTime(timeInputValue(parsed))
+            }}
+          />
+        </label>
+        <label>TC ODO km
+          <input
+            inputMode="decimal"
+            type="number"
+            step="0.001"
+            value={odo}
+            onFocus={(e) => e.currentTarget.select()}
+            onChange={(e) => {
+              setOdo(e.target.value)
+              setOdoSource('manual')
+            }}
+          />
+        </label>
+      </div>
+
+      <div className="tc-correction-meta">
+        <span>{odoSource === 'gps-auto' ? 'ODO AUTO-CALIBRATED FROM TIME' : 'ODO MANUAL OVERRIDE'}</span>
+        {!autoOdoAvailable && <span>GPS auto ODO unavailable for this time · ODO remains editable</span>}
+        {hasOfficialCorrection && <span>{formatDeviation(effectiveDeviation)} {timingState(effectiveDeviation)}</span>}
+        {hasOfficialCorrection && log.correctionMethod && (
+          <span>GPS {log.correctionMethod.toUpperCase()}{log.correctionGpsAccuracyM === null || log.correctionGpsAccuracyM === undefined ? '' : ` · ${Math.round(log.correctionGpsAccuracyM)} m accuracy`}</span>
+        )}
+        {log.officialRestartMs && <span>Restart {clockTime(log.officialRestartMs)}</span>}
+        {!isLatest && <span>History edit only · live timing is anchored by the latest TC</span>}
+        <span>Original capture retained</span>
+      </div>
+      <button className="primary-button full-button" onClick={() => onApply(log.id, time, Number(odo), odoSource)}>
+        APPLY TC CORRECTION
+      </button>
+    </div>
   )
 }
 
