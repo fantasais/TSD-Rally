@@ -596,7 +596,16 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
   const updateSegment = (id: string, patch: Partial<SpeedSector>) => {
     setSettings((current) => ({
       ...current,
-      sectors: current.sectors.map((segment) => segment.id === id ? { ...segment, ...patch } : segment)
+      sectors: current.sectors.map((segment) => {
+        if (segment.id !== id) return segment
+        const next = { ...segment, ...patch }
+        if (segmentKind(next) === 'speed' && next.sourceBasis === 'time') {
+          const distanceKm = Math.max(0, next.toKm - next.fromKm)
+          const durationSeconds = Math.max(0, next.sourceDurationSeconds ?? 0)
+          next.speedKph = durationSeconds > 0 ? (distanceKm / durationSeconds) * 3600 : 0
+        }
+        return next
+      })
     }))
   }
 
@@ -647,6 +656,46 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
     addSector()
   }
 
+  const addTimeSector = () => {
+    const id = crypto.randomUUID()
+    setSettings((current) => {
+      const sorted = sortSectors(current.sectors)
+      const last = sorted[sorted.length - 1]
+      const from = last?.toKm ?? 0
+      const to = from + 1
+      const durationSeconds = 60
+      return {
+        ...current,
+        sectors: [...sorted, {
+          id,
+          fromKm: from,
+          toKm: to,
+          speedKph: ((to - from) / durationSeconds) * 3600,
+          kind: 'speed',
+          sourceBasis: 'time',
+          sourceDurationSeconds: durationSeconds
+        }]
+      }
+    })
+    revealNewEntry(id)
+  }
+
+  const addNextTimeOnEnter = (event: React.KeyboardEvent<HTMLInputElement>, segmentId: string) => {
+    if (event.key !== 'Enter') return
+    event.preventDefault()
+
+    const sorted = sortSectors(settings.sectors)
+    const index = sorted.findIndex((segment) => segment.id === segmentId)
+    if (index !== sorted.length - 1) {
+      const next = sorted[index + 1]
+      const nextEntry = next ? document.getElementById(`chart-entry-${next.id}`) : null
+      nextEntry?.querySelector<HTMLInputElement>('[data-new-entry-focus="true"]')?.focus()
+      return
+    }
+
+    addTimeSector()
+  }
+
   const addZone = () => {
     const id = crypto.randomUUID()
     setSettings((current) => {
@@ -682,6 +731,16 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
   const setZoneSecondsPart = (segment: SpeedSector, secondsPart: number) => {
     const minutes = Math.floor(Math.max(0, segment.zoneDurationSeconds ?? 0) / 60)
     updateSegment(segment.id, { zoneDurationSeconds: minutes * 60 + Math.max(0, Math.min(59, Math.round(secondsPart))) })
+  }
+
+  const setTimeMinutes = (segment: SpeedSector, minutes: number) => {
+    const secondsPart = Math.max(0, segment.sourceDurationSeconds ?? 0) % 60
+    updateSegment(segment.id, { sourceDurationSeconds: Math.max(0, Math.round(minutes)) * 60 + secondsPart })
+  }
+
+  const setTimeSecondsPart = (segment: SpeedSector, secondsPart: number) => {
+    const minutes = Math.floor(Math.max(0, segment.sourceDurationSeconds ?? 0) / 60)
+    updateSegment(segment.id, { sourceDurationSeconds: minutes * 60 + Math.max(0, Math.min(59, Math.round(secondsPart))) })
   }
 
   const setScratchMinutes = (minutes: number) => {
@@ -722,7 +781,7 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
         <div className="section-head">
           <h2>SPEED CHART</h2>
         </div>
-        <p className="section-copy">Photo import first. Review only the highlighted corrections, or enter the chart manually.</p>
+        <p className="section-copy">Import a photo or PDF first. Review only highlighted corrections, or enter SPEED, TIME or DZ/FZ rows manually.</p>
 
         <SpeedChartImporter
           onLoad={(sectors) => setSettings((current) => ({ ...current, sectors }))}
@@ -764,6 +823,24 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
               </div>
             )}
           </div>
+        ) : segment.sourceBasis === 'time' ? (
+          <div className="time-entry" id={`chart-entry-${segment.id}`} key={segment.id}>
+            <div className="time-entry-head">
+              <div className="time-title-row">
+                <strong>TIME {String(index + 1).padStart(2, '0')}</strong>
+                <span>{segment.speedKph > 0 ? `${segment.speedKph.toFixed(2)} km/h derived` : 'derived speed —'}</span>
+              </div>
+              <button className="delete-text-button" onClick={() => removeSector(segment.id)}>REMOVE</button>
+            </div>
+            <div className="time-distance-grid">
+              <label>FROM km<input inputMode="decimal" type="number" step="0.001" value={segment.fromKm} onChange={(e) => updateNumber(segment.id, 'fromKm', e.target.value)} /></label>
+              <label>TO km<input data-new-entry-focus="true" inputMode="decimal" type="number" step="0.001" value={segment.toKm} onChange={(e) => updateNumber(segment.id, 'toKm', e.target.value)} /></label>
+            </div>
+            <div className="time-duration-fields">
+              <label>MIN<input type="number" min="0" step="1" value={Math.floor(Math.max(0, segment.sourceDurationSeconds ?? 0) / 60)} onChange={(e) => setTimeMinutes(segment, Number(e.target.value))} /></label>
+              <label>SEC<input type="number" min="0" max="59" step="1" value={Math.max(0, segment.sourceDurationSeconds ?? 0) % 60} onChange={(e) => setTimeSecondsPart(segment, Number(e.target.value))} onKeyDown={(e) => addNextTimeOnEnter(e, segment.id)} /></label>
+            </div>
+          </div>
         ) : (
           <div className="speed-entry" id={`chart-entry-${segment.id}`} key={segment.id}>
             <div className="speed-entry-label">SPEED {String(index + 1).padStart(2, '0')}</div>
@@ -778,6 +855,7 @@ function SetupScreen({ settings, setSettings, errors, gpsError, arm, startNow }:
 
         <div className="chart-add-buttons">
           <button className="small-button" onClick={addSector}>+ SPEED</button>
+          <button className="small-button time-add" onClick={addTimeSector}>+ TIME</button>
           <button className="small-button zone-add" onClick={addZone}>+ DZ/FZ</button>
         </div>
 
@@ -1221,3 +1299,4 @@ function TcCorrectionCard({ log, isLatest, estimateTcOdo, onApply }: TcCorrectio
 }
 
 export default App
+

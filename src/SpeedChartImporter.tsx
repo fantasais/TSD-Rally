@@ -1,8 +1,12 @@
 import { useMemo, useRef, useState } from 'react'
 import { createWorker, OEM, PSM } from 'tesseract.js'
+import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist'
+import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
 import type { SpeedSector } from './types'
 
-type LocalOcrMode = 'speed' | 'zone_speed' | 'zone_time'
+GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+
+type LocalOcrMode = 'speed' | 'time' | 'zone_speed' | 'zone_time'
 type ConfidenceLabel = 'high' | 'medium' | 'low'
 
 type LocalOcrRow = {
@@ -238,25 +242,70 @@ function normalizeSpeed(number: number) {
   return number
 }
 
-function parseSpeedOrTime(value: string) {
+function parseDurationText(value: string): number | null {
   const upper = cleanNumericText(value)
-  const number = parseNumber(upper)
-  if (number === null) return null
 
-  const isTime = /MIN|M1N|MINS|MINUTE/.test(upper)
-  if (isTime) {
+  const colon = /(\d+)\s*:\s*(\d{1,2})/.exec(upper)
+  if (colon) {
+    const minutes = Number(colon[1])
+    const seconds = Number(colon[2])
+    if (Number.isFinite(minutes) && seconds >= 0 && seconds <= 59) return minutes * 60 + seconds
+  }
+
+  const minutesMatch = /(\d+)\s*(?:MIN|M1N|MINS|MINUTE|MINUTES)/.exec(upper)
+  if (!minutesMatch) return null
+
+  const minutes = Number(minutesMatch[1])
+  const afterMinutes = upper.slice((minutesMatch.index ?? 0) + minutesMatch[0].length)
+  const secondsMatch = /(\d{1,2})\s*(?:SEC|SECS|SECOND|SECONDS)?/.exec(afterMinutes)
+  const seconds = secondsMatch ? Number(secondsMatch[1]) : 0
+
+  if (!Number.isFinite(minutes) || !Number.isFinite(seconds) || seconds < 0 || seconds > 59) return null
+  return minutes * 60 + seconds
+}
+
+function parseSpeedOrTime(value: string) {
+  const durationSeconds = parseDurationText(value)
+  if (durationSeconds !== null) {
     return {
-      mode: 'zone_time' as const,
+      mode: 'time' as const,
       speedKph: 0,
-      durationSeconds: Math.max(0, Math.round(number * 60))
+      durationSeconds
     }
   }
+
+  const number = parseNumber(value)
+  if (number === null) return null
 
   return {
     mode: 'speed' as const,
     speedKph: normalizeSpeed(number),
     durationSeconds: 0
   }
+}
+
+function isTimedMode(mode: LocalOcrMode) {
+  return mode === 'time' || mode === 'zone_time'
+}
+
+/**
+ * Time-heavy charts (such as BEGIN ODO / END ODO / SPEED-TIME) are true segment-time
+ * charts. An isolated time row inside an otherwise speed-based chart keeps the existing
+ * DZ/FZ fixed-time interpretation.
+ */
+function classifyTimedChartRows(rows: LocalOcrRow[]) {
+  const timeRows = rows.filter((row) => row.mode === 'time').length
+  const speedRows = rows.filter((row) => row.mode === 'speed' || row.mode === 'zone_speed').length
+  const isTimeChart = timeRows > 0 && timeRows >= speedRows
+
+  return rows.map((row) => row.mode === 'time' && !isTimeChart
+    ? { ...row, mode: 'zone_time' as const, note: row.note || 'Fixed-time row in speed chart' }
+    : row)
+}
+
+function derivedSpeedKph(fromKm: number, toKm: number, durationSeconds: number) {
+  const distanceKm = Math.max(0, toKm - fromKm)
+  return durationSeconds > 0 ? (distanceKm / durationSeconds) * 3600 : 0
 }
 
 function flattenWords(blocks: any[]): FlatWord[] {
@@ -311,7 +360,9 @@ function wordRole(value: string): 'start' | 'end' | 'speed' | null {
     word.startsWith('SPD') ||
     word === 'KM' ||
     word === 'KMH' ||
-    word === 'KPH'
+    word === 'KPH' ||
+    word === 'TIME' ||
+    word.startsWith('TIM')
   ) return 'speed'
 
   return null
@@ -845,7 +896,7 @@ async function readSpeedCell(
   rect: { left: number; top: number; right: number; bottom: number }
 ) {
   const readings: { value: ReturnType<typeof parseSpeedOrTime>; confidence: number; text: string }[] = []
-  const whitelist = '0123456789.,ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '
+  const whitelist = '0123456789.,:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz '
 
   for (const variant of ['grey', 'binary'] as const) {
     const crop = cropCanvas(source, rect.left, rect.top, rect.right, rect.bottom, variant)
@@ -918,7 +969,7 @@ async function repairWorkingRow(
 ) {
   const needsFrom = force || !Number.isFinite(row.fromKm) || row.fromConfidence < 78
   const needsTo = force || !Number.isFinite(row.toKm) || row.toConfidence < 78
-  const needsValue = force || !((row.mode === 'zone_time' && row.durationSeconds > 0) || (row.mode !== 'zone_time' && row.speedKph > 0)) || row.valueConfidence < 78
+  const needsValue = force || !((isTimedMode(row.mode) && row.durationSeconds > 0) || (!isTimedMode(row.mode) && row.speedKph > 0)) || row.valueConfidence < 78
 
   if (needsFrom) {
     const reading = await readNumberCell(worker, canvas, rectForCell(geometry, row, 'from'))
@@ -946,7 +997,7 @@ async function repairWorkingRow(
 
   const validFrom = Number.isFinite(row.fromKm)
   const validTo = Number.isFinite(row.toKm)
-  const validValue = row.mode === 'zone_time' ? row.durationSeconds > 0 : row.speedKph > 0
+  const validValue = isTimedMode(row.mode) ? row.durationSeconds > 0 : row.speedKph > 0
   const minimumConfidence = Math.min(
     validFrom ? row.fromConfidence : 0,
     validTo ? row.toConfidence : 0,
@@ -1019,20 +1070,21 @@ function rowsFromText(text: string): LocalOcrRow[] {
     const numericTokens = line.match(/\d+(?:\.\d+)?/g)?.map(Number).filter(Number.isFinite) ?? []
     if (numericTokens.length < 3) continue
 
+    const durationSeconds = parseDurationText(line)
+    const minimumWithSerial = durationSeconds !== null ? 5 : 4
     let values = numericTokens
-    if (numericTokens.length >= 4 && Number.isInteger(numericTokens[0]) && numericTokens[0] >= 0 && numericTokens[0] <= 99) {
+    if (numericTokens.length >= minimumWithSerial && Number.isInteger(numericTokens[0]) && numericTokens[0] >= 0 && numericTokens[0] <= 9999) {
       values = numericTokens.slice(1)
     }
     if (values.length < 3) continue
 
     const [fromKm, toKm, third] = values
-    const isTime = /MIN|M1N|MINS|MINUTE/.test(line)
     parsed.push({
       fromKm,
       toKm,
-      mode: isTime ? 'zone_time' : 'speed',
-      speedKph: isTime ? 0 : normalizeSpeed(third),
-      durationSeconds: isTime ? Math.round(third * 60) : 0,
+      mode: durationSeconds !== null ? 'time' : 'speed',
+      speedKph: durationSeconds !== null ? 0 : normalizeSpeed(third),
+      durationSeconds: durationSeconds ?? 0,
       confidence: 'low',
       note: 'Fallback OCR text: verify this row'
     })
@@ -1082,7 +1134,152 @@ function dedupeAndAnnotate(rows: LocalOcrRow[]) {
     }
   })
 
-  return unique
+  return classifyTimedChartRows(unique)
+}
+
+
+type PdfTextPiece = { text: string; x: number; y: number }
+
+function parseStructuredPdfLine(line: string): LocalOcrRow | null {
+  const cleaned = line.replace(/\s+/g, ' ').trim()
+  if (!cleaned) return null
+
+  const withSerial = /^(\d{1,3})\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(.+)$/.exec(cleaned)
+  const withoutSerial = /^(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(.+)$/.exec(cleaned)
+
+  let fromText: string
+  let toText: string
+  let valueText: string
+
+  if (withSerial) {
+    fromText = withSerial[2]
+    toText = withSerial[3]
+    valueText = withSerial[4]
+  } else if (withoutSerial) {
+    fromText = withoutSerial[1]
+    toText = withoutSerial[2]
+    valueText = withoutSerial[3]
+  } else {
+    return null
+  }
+
+  const fromKm = Number(fromText)
+  const toKm = Number(toText)
+  if (!Number.isFinite(fromKm) || !Number.isFinite(toKm)) return null
+
+  const durationSeconds = parseDurationText(valueText)
+  if (durationSeconds !== null) {
+    return {
+      fromKm,
+      toKm,
+      mode: 'time',
+      speedKph: 0,
+      durationSeconds,
+      confidence: 'high',
+      note: 'PDF text'
+    }
+  }
+
+  const speed = parseNumber(valueText)
+  if (speed === null) return null
+  return {
+    fromKm,
+    toKm,
+    mode: 'speed',
+    speedKph: normalizeSpeed(speed),
+    durationSeconds: 0,
+    confidence: 'high',
+    note: 'PDF text'
+  }
+}
+
+function linesFromPdfTextItems(items: any[]) {
+  const pieces: PdfTextPiece[] = items
+    .filter((item) => typeof item?.str === 'string' && item.str.trim() && Array.isArray(item.transform))
+    .map((item) => ({
+      text: item.str.trim(),
+      x: Number(item.transform[4]) || 0,
+      y: Number(item.transform[5]) || 0
+    }))
+
+  const groups: { y: number; pieces: PdfTextPiece[] }[] = []
+  for (const piece of pieces.sort((a, b) => b.y - a.y || a.x - b.x)) {
+    let group = groups.find((candidate) => Math.abs(candidate.y - piece.y) <= 2.5)
+    if (!group) {
+      group = { y: piece.y, pieces: [] }
+      groups.push(group)
+    }
+    group.pieces.push(piece)
+  }
+
+  return groups
+    .sort((a, b) => b.y - a.y)
+    .map((group) => group.pieces.sort((a, b) => a.x - b.x).map((piece) => piece.text).join(' '))
+}
+
+async function canvasToPngFile(canvas: HTMLCanvasElement, name: string) {
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((value) => value ? resolve(value) : reject(new Error('Could not render PDF page.')), 'image/png')
+  })
+  return new File([blob], name, { type: 'image/png' })
+}
+
+async function recognizeSpeedChartPdf(file: File, onProgress?: ProgressCallback): Promise<LocalOcrRow[]> {
+  onProgress?.(0.02, 'PDF selected')
+  const data = new Uint8Array(await file.arrayBuffer())
+  const document = await getDocument({ data }).promise
+  const textRows: LocalOcrRow[] = []
+
+  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+    onProgress?.(0.04 + (pageNumber - 1) / Math.max(1, document.numPages) * 0.42, `Reading PDF page ${pageNumber}`)
+    const page = await document.getPage(pageNumber)
+    const content = await page.getTextContent()
+    const lines = linesFromPdfTextItems(content.items as any[])
+    for (const line of lines) {
+      const row = parseStructuredPdfLine(line)
+      if (row) textRows.push(row)
+    }
+  }
+
+  if (textRows.length >= 2) {
+    onProgress?.(0.96, `Parsed ${textRows.length} PDF rows`)
+    const resolved = dedupeAndAnnotate(textRows)
+    onProgress?.(1, 'Ready to review')
+    return resolved
+  }
+
+  // Scanned PDFs may contain no usable text layer. Render each page and reuse
+  // the same local OCR engine already used for photographs.
+  const ocrRows: LocalOcrRow[] = []
+  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+    onProgress?.(0.08 + (pageNumber - 1) / Math.max(1, document.numPages) * 0.82, `OCR PDF page ${pageNumber}`)
+    const page = await document.getPage(pageNumber)
+    const viewport = page.getViewport({ scale: 2.4 })
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.ceil(viewport.width)
+    canvas.height = Math.ceil(viewport.height)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('PDF rendering is not available on this device.')
+    await page.render({ canvasContext: ctx, viewport } as any).promise
+    const imageFile = await canvasToPngFile(canvas, `${file.name}-page-${pageNumber}.png`)
+    try {
+      const pageRows = await recognizeSpeedChartPhoto(imageFile, (progress, status) => {
+        const pageBase = (pageNumber - 1) / Math.max(1, document.numPages)
+        const combined = 0.08 + (pageBase + progress / Math.max(1, document.numPages)) * 0.82
+        onProgress?.(combined, status)
+      })
+      ocrRows.push(...pageRows)
+    } catch {
+      // Rally PDFs often include blank continuation pages. A page with no usable
+      // rows is not a document failure; keep scanning the remaining pages.
+      onProgress?.(0.08 + pageNumber / Math.max(1, document.numPages) * 0.82, `Skipped blank/unreadable PDF page ${pageNumber}`)
+    }
+  }
+
+  const resolved = dedupeAndAnnotate(ocrRows)
+  if (!resolved.length) throw new Error('No usable chart rows were found in the PDF.')
+  onProgress?.(1, 'Ready to review')
+  return resolved
 }
 
 async function recognizeSpeedChartPhoto(file: File, onProgress?: ProgressCallback): Promise<LocalOcrRow[]> {
@@ -1174,7 +1371,7 @@ async function recognizeSpeedChartPhoto(file: File, onProgress?: ProgressCallbac
       const row = rows[index]
       const validFrom = Number.isFinite(row.fromKm)
       const validTo = Number.isFinite(row.toKm)
-      const validValue = row.mode === 'zone_time' ? row.durationSeconds > 0 : row.speedKph > 0
+      const validValue = isTimedMode(row.mode) ? row.durationSeconds > 0 : row.speedKph > 0
       const weak = Math.min(row.fromConfidence || 0, row.toConfidence || 0, row.valueConfidence || 0) < 78
       if (!validFrom || !validTo || !validValue || weak || row.inserted) {
         setWorkerProgressPhase(0.58 + (index / Math.max(1, rows.length)) * 0.28, 0.008)
@@ -1222,7 +1419,7 @@ async function recognizeSpeedChartPhoto(file: File, onProgress?: ProgressCallbac
 
 type ReviewRow = LocalOcrRow & {
   id: string
-  source?: 'ocr' | 'manual'
+  source?: 'ocr' | 'pdf' | 'manual'
 }
 
 function sortReviewRows(rows: ReviewRow[]) {
@@ -1239,7 +1436,7 @@ function sortReviewRows(rows: ReviewRow[]) {
 
 function rowIsComplete(row: ReviewRow) {
   if (!Number.isFinite(row.fromKm) || !Number.isFinite(row.toKm) || !(row.toKm > row.fromKm)) return false
-  if (row.mode === 'zone_time') return row.durationSeconds > 0
+  if (isTimedMode(row.mode)) return row.durationSeconds > 0
   return row.speedKph > 0
 }
 
@@ -1262,6 +1459,9 @@ function hardIssues(rows: ReviewRow[]): string[] {
     }
     if ((row.mode === 'speed' || row.mode === 'zone_speed') && !(row.speedKph > 0)) {
       issues.push(`Row ${n}: check speed.`)
+    }
+    if (row.mode === 'time' && !(row.durationSeconds > 0)) {
+      issues.push(`Row ${n}: check segment time.`)
     }
     if (row.mode === 'zone_time' && !(row.durationSeconds > 0)) {
       issues.push(`Row ${n}: check zone time.`)
@@ -1287,6 +1487,18 @@ function toSectors(rows: ReviewRow[]): SpeedSector[] {
         toKm: row.toKm,
         speedKph: row.speedKph,
         kind: 'speed'
+      }
+    }
+
+    if (row.mode === 'time') {
+      return {
+        id: crypto.randomUUID(),
+        fromKm: row.fromKm,
+        toKm: row.toKm,
+        speedKph: derivedSpeedKph(row.fromKm, row.toKm, row.durationSeconds),
+        kind: 'speed',
+        sourceBasis: 'time',
+        sourceDurationSeconds: row.durationSeconds
       }
     }
 
@@ -1334,23 +1546,33 @@ export default function SpeedChartImporter({ onLoad }: Props) {
   const reviewReady = Boolean(rows && issues.length === 0 && needsCheckCount === 0)
 
   const scan = async (file: File) => {
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
     setBusy(true)
     setError(null)
     setRows(null)
     setFileName(file.name)
     setProgress(0)
-    setStatus('Photo selected')
+    setStatus(isPdf ? 'PDF selected' : 'Photo selected')
 
     try {
-      const parsed = await recognizeSpeedChartPhoto(file, (nextProgress, nextStatus) => {
-        setProgress(nextProgress)
-        setStatus(nextStatus)
-      })
+      const parsed = isPdf
+        ? await recognizeSpeedChartPdf(file, (nextProgress, nextStatus) => {
+            setProgress(nextProgress)
+            setStatus(nextStatus)
+          })
+        : await recognizeSpeedChartPhoto(file, (nextProgress, nextStatus) => {
+            setProgress(nextProgress)
+            setStatus(nextStatus)
+          })
 
-      setRows(parsed.map((row) => ({ ...row, id: crypto.randomUUID(), source: 'ocr' as const })))
+      setRows(parsed.map((row) => ({
+        ...row,
+        id: crypto.randomUUID(),
+        source: isPdf ? 'pdf' as const : 'ocr' as const
+      })))
     } catch (scanError) {
       const message = scanError instanceof Error ? scanError.message : 'Could not interpret the speed chart.'
-      setStatus('OCR failed')
+      setStatus('Import failed')
       setProgress(0)
       setError(message)
     } finally {
@@ -1402,7 +1624,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,application/pdf"
         style={{ display: 'none' }}
         onChange={(event) => {
           const file = event.target.files?.[0]
@@ -1413,16 +1635,16 @@ export default function SpeedChartImporter({ onLoad }: Props) {
 
       <div className="ocr-import-head">
         <div>
-          <strong>LOCAL PHOTO IMPORT</strong>
-          <span>Fill the photo with the table. OCR runs on this phone; always review before loading.</span>
+          <strong>LOCAL CHART IMPORT</strong>
+          <span>Import a photo, image or PDF. Digital PDFs use their text layer first; scanned pages fall back to local OCR.</span>
         </div>
         <button className="small-button" disabled={busy} onClick={() => inputRef.current?.click()}>
-          {busy ? 'READING…' : 'UPLOAD PHOTO'}
+          {busy ? 'READING…' : 'IMPORT CHART'}
         </button>
       </div>
 
       <div className="ocr-import-note">
-        No API key or per-scan charge. OCR assets are stored with the installed app and work in flight mode.
+        No API key or per-scan charge. Image OCR and PDF parsing run locally and remain available in flight mode after installation.
       </div>
 
       {fileName && <div className="ocr-file-name">{fileName}</div>}
@@ -1466,12 +1688,12 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                 const fromIssue = !Number.isFinite(row.fromKm) ||
                   (index === 0 ? Math.abs(row.fromKm) > 0.001 : Boolean(previous && Math.abs(previous.toKm - row.fromKm) > 0.001))
                 const toIssue = !Number.isFinite(row.toKm) || !(row.toKm > row.fromKm)
-                const valueIssue = row.mode === 'zone_time' ? !(row.durationSeconds > 0) : !(row.speedKph > 0)
+                const valueIssue = isTimedMode(row.mode) ? !(row.durationSeconds > 0) : !(row.speedKph > 0)
 
                 return (
                   <div
                     key={row.id}
-                    className={`ocr-review-row ${needsCheck ? 'needs-check' : ''} ${row.mode !== 'speed' ? 'zone-row' : ''}`}
+                    className={`ocr-review-row ${needsCheck ? 'needs-check' : ''} ${row.mode === 'time' ? 'time-row' : row.mode !== 'speed' ? 'zone-row' : ''}`}
                     title={needsCheck ? (row.note || 'Check against the sheet') : undefined}
                   >
                     <div className="ocr-row-number">
@@ -1501,8 +1723,8 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                       onBlur={() => settleRow(row.id)}
                     />
 
-                    {row.mode === 'zone_time' ? (
-                      <div className={`ocr-time-value ${valueIssue ? 'ocr-cell-issue-group' : ''}`} aria-label={`Row ${index + 1} zone time`}>
+                    {isTimedMode(row.mode) ? (
+                      <div className={`ocr-time-value ${valueIssue ? 'ocr-cell-issue-group' : ''}`} aria-label={`Row ${index + 1} ${row.mode === 'time' ? 'segment time' : 'zone time'}`}>
                         <input
                           aria-label={`Row ${index + 1} minutes`}
                           type="number"
@@ -1531,6 +1753,9 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                           })}
                           onBlur={() => settleRow(row.id)}
                         />
+                        {row.mode === 'time' && row.durationSeconds > 0 && (
+                          <small className="ocr-derived-speed">{derivedSpeedKph(row.fromKm, row.toKm, row.durationSeconds).toFixed(2)} km/h</small>
+                        )}
                       </div>
                     ) : (
                       <input
@@ -1554,6 +1779,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
                       }}
                     >
                       <option value="speed">SPEED</option>
+                      <option value="time">TIME</option>
                       <option value="zone_speed">DZ/FZ SPD</option>
                       <option value="zone_time">DZ/FZ TIME</option>
                     </select>
@@ -1567,7 +1793,7 @@ export default function SpeedChartImporter({ onLoad }: Props) {
 
           <button className="secondary-button full-button ocr-add-row" onClick={addRow}>+ ROW</button>
           <div className="ocr-import-note ocr-manual-hint">
-            Manual rows move automatically into ODO order once START, END and SPEED/TIME are complete.
+            Manual rows move automatically into ODO order once START, END and SPEED/TIME are complete. TIME rows keep the prescribed MM:SS and derive the live target speed automatically.
           </div>
 
           {issues.length > 0 && (
