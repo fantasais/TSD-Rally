@@ -478,3 +478,79 @@ button {
 }
 .next-main b { grid-column: -2 / -1; }
 .sftc-button:disabled { opacity: .38; }
+
+/* V0.5 chart-source expansion: native segment-time rows + PDF import */
+.time-add {
+  border-color: rgba(155,226,62,.55);
+  color: var(--green);
+}
+.time-entry {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid rgba(155,226,62,.28);
+  border-radius: 7px;
+  background: #0c0f09;
+}
+.time-entry-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.time-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.time-title-row strong {
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 950;
+  letter-spacing: .1em;
+}
+.time-title-row span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 850;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.time-distance-grid,
+.time-duration-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.time-distance-grid label,
+.time-duration-fields label { margin-top: 10px; }
+.time-duration-fields input {
+  text-align: center;
+  font-size: 19px;
+}
+.ocr-review-row.time-row {
+  background: rgba(155,226,62,.035);
+  box-shadow: inset 3px 0 0 rgba(155,226,62,.45);
+}
+.ocr-review-row.time-row > select {
+  border-color: rgba(155,226,62,.35);
+  color: var(--green);
+}
+
+@media (max-width: 420px) {
+  .chart-add-buttons { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .chart-add-buttons .small-button { min-width: 0; padding-left: 5px; padding-right: 5px; }
+  .time-title-row { display: grid; gap: 2px; }
+}
+.ocr-derived-speed {
+  grid-column: 1 / -1;
+  display: block;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 850;
+  line-height: 1.1;
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}

@@ -1,6 +1,7 @@
 export type SegmentKind = 'speed' | 'zone'
 export type ZoneType = 'DZ' | 'FZ'
 export type ZoneBasis = 'speed' | 'time'
+export type SegmentSourceBasis = 'speed' | 'time'
 
 export type SpeedSector = {
   id: string
@@ -11,6 +12,10 @@ export type SpeedSector = {
   zoneType?: ZoneType
   zoneBasis?: ZoneBasis
   zoneDurationSeconds?: number
+  // Original chart representation. TIME sectors retain their prescribed segment time
+  // while speedKph stores the equivalent average used by the live rally display.
+  sourceBasis?: SegmentSourceBasis
+  sourceDurationSeconds?: number
 }
 
 export type RallySettings = {

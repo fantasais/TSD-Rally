@@ -30,7 +30,7 @@ export default defineConfig({
       },
       workbox: {
         navigateFallback: '/index.html',
-        globPatterns: ['**/*.{js,css,html,png,svg,ico,wasm,gz}'],
+        globPatterns: ['**/*.{js,mjs,css,html,png,svg,ico,wasm,gz}'],
         // Tesseract core/language files are larger than Workbox's 2 MiB default.
         maximumFileSizeToCacheInBytes: 15 * 1024 * 1024
       }
