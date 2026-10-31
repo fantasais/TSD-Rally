@@ -87,4 +87,24 @@ const invalidTimeZone: SpeedSector[] = [
 ]
 assert.ok(validateSectors(invalidTimeZone).some((message) => message.includes('zone time')))
 
+
+// Native TIME chart: preserve the prescribed segment duration exactly while
+// deriving the display target speed from distance / time.
+const withNativeTime: SpeedSector[] = [
+  { id: 't1', fromKm: 0, toKm: 0.06, speedKph: 43.2, kind: 'speed', sourceBasis: 'time', sourceDurationSeconds: 5 },
+  { id: 't2', fromKm: 0.06, toKm: 0.28, speedKph: (0.22 / 28) * 3600, kind: 'speed', sourceBasis: 'time', sourceDurationSeconds: 28 },
+  { id: 't3', fromKm: 0.28, toKm: 0.37, speedKph: 40.5, kind: 'speed', sourceBasis: 'time', sourceDurationSeconds: 8 }
+]
+assert.deepEqual(validateSectors(withNativeTime), [])
+assert.ok(Math.abs(idealTravelSecondsBetween(0, 0.06, withNativeTime) - 5) < 1e-9)
+assert.ok(Math.abs(idealTravelSecondsBetween(0.06, 0.28, withNativeTime) - 28) < 1e-9)
+assert.ok(Math.abs(idealElapsedSecondsAtDistance(0.37, withNativeTime) - 41) < 1e-9)
+assert.ok(Math.abs(effectiveSpeedKph(withNativeTime[0]) - 43.2) < 1e-9)
+assert.ok(Math.abs(effectiveSpeedKph(withNativeTime[1]) - ((0.22 / 28) * 3600)) < 1e-9)
+
+const invalidNativeTime: SpeedSector[] = [
+  { id: 't', fromKm: 0, toKm: 1, speedKph: 0, kind: 'speed', sourceBasis: 'time', sourceDurationSeconds: 0 }
+]
+assert.ok(validateSectors(invalidNativeTime).some((message) => message.includes('segment time')))
+
 console.log('TSD engine self-test: PASS')

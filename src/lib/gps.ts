@@ -3,6 +3,10 @@ import type { GpsOdoEstimate, GpsOdoSample, GpsPoint, GpsState } from '../types'
 const EARTH_RADIUS_M = 6_371_000
 const MAX_ACCURACY_M = 50
 const MAX_REASONABLE_SPEED_KPH = 180
+const STATIONARY_SPEED_MPS = 0.4
+const STATIONARY_RELEASE_SPEED_MPS = 0.8
+const STATIONARY_CONFIRM_MS = 3_000
+const STATIONARY_RELEASE_FIXES = 2
 
 export function haversineMeters(a: GpsPoint, b: GpsPoint): number {
   const toRad = (deg: number) => (deg * Math.PI) / 180
@@ -28,6 +32,10 @@ export function pointFromPosition(position: GeolocationPosition): GpsPoint {
 export function processGpsPoint(state: GpsState, point: GpsPoint): GpsState {
   const base: GpsState = {
     ...state,
+    lastObservedPoint: state.lastObservedPoint ?? state.lastAcceptedPoint ?? null,
+    isStationary: state.isStationary ?? false,
+    stationaryCandidateSinceMs: state.stationaryCandidateSinceMs ?? null,
+    stationaryReleaseFixes: state.stationaryReleaseFixes ?? 0,
     accuracyM: point.accuracyM,
     speedKph: point.speedMps === null ? state.speedKph : point.speedMps * 3.6,
     lastFixMs: point.timestampMs,
@@ -39,7 +47,14 @@ export function processGpsPoint(state: GpsState, point: GpsPoint): GpsState {
   }
 
   if (!state.lastAcceptedPoint) {
-    return { ...base, lastAcceptedPoint: point, acceptedFixes: state.acceptedFixes + 1 }
+    const lowSpeed = point.speedMps !== null && point.speedMps < STATIONARY_SPEED_MPS
+    return {
+      ...base,
+      lastAcceptedPoint: point,
+      lastObservedPoint: point,
+      stationaryCandidateSinceMs: lowSpeed ? point.timestampMs : null,
+      acceptedFixes: state.acceptedFixes + 1
+    }
   }
 
   const previous = state.lastAcceptedPoint
@@ -48,23 +63,95 @@ export function processGpsPoint(state: GpsState, point: GpsPoint): GpsState {
 
   const segmentM = haversineMeters(previous, point)
   const impliedSpeedKph = (segmentM / dtSeconds) * 3.6
-  const noiseGateM = Math.max(1.5, Math.min(previous.accuracyM, point.accuracyM) * 0.15)
-
   if (impliedSpeedKph > MAX_REASONABLE_SPEED_KPH) {
     return { ...base, rejectedFixes: state.rejectedFixes + 1 }
   }
 
+  const observedPrevious = state.lastObservedPoint ?? previous
+  const observedDtSeconds = Math.max(0, (point.timestampMs - observedPrevious.timestampMs) / 1000)
+  const observedSegmentM = observedDtSeconds > 0 ? haversineMeters(observedPrevious, point) : 0
+  const observedImpliedSpeedKph = observedDtSeconds > 0 ? (observedSegmentM / observedDtSeconds) * 3.6 : 0
+  const observationNoiseGateM = Math.max(1.5, Math.min(observedPrevious.accuracyM, point.accuracyM) * 0.15)
+
+  const reportedStopped = point.speedMps !== null &&
+    point.speedMps < STATIONARY_SPEED_MPS &&
+    (observedDtSeconds <= 0 || observedSegmentM < Math.max(2.5, observationNoiseGateM * 1.5))
+  const inferredStopped = point.speedMps === null && observedDtSeconds > 0 && observedDtSeconds <= 5 && observedSegmentM < Math.max(2.5, observationNoiseGateM)
+  const looksStationary = reportedStopped || inferredStopped
+
+  if (state.isStationary) {
+    const releaseBySpeed = point.speedMps !== null && point.speedMps >= STATIONARY_RELEASE_SPEED_MPS
+    const releaseByMovement = observedDtSeconds > 0 &&
+      observedDtSeconds <= 5 &&
+      observedImpliedSpeedKph <= MAX_REASONABLE_SPEED_KPH &&
+      observedSegmentM >= Math.max(4, observationNoiseGateM * 2)
+    const releaseFixes = releaseByMovement ? (state.stationaryReleaseFixes ?? 0) + 1 : 0
+
+    if (!releaseBySpeed && releaseFixes < STATIONARY_RELEASE_FIXES) {
+      return {
+        ...base,
+        lastObservedPoint: point,
+        isStationary: true,
+        stationaryCandidateSinceMs: state.stationaryCandidateSinceMs ?? point.timestampMs,
+        stationaryReleaseFixes: releaseFixes,
+        rejectedFixes: state.rejectedFixes + 1
+      }
+    }
+
+    // Movement has resumed. The first credible moving fix is measured from the
+    // stationary anchor so GPS wander accumulated while stopped is never added.
+    const noiseGateM = Math.max(1.5, Math.min(previous.accuracyM, point.accuracyM) * 0.15)
+    const addSegment = segmentM >= noiseGateM
+    return {
+      ...base,
+      rawDistanceKm: state.rawDistanceKm + (addSegment ? segmentM / 1000 : 0),
+      lastAcceptedPoint: point,
+      lastObservedPoint: point,
+      speedKph: point.speedMps === null ? impliedSpeedKph : point.speedMps * 3.6,
+      acceptedFixes: state.acceptedFixes + 1,
+      isStationary: false,
+      stationaryCandidateSinceMs: null,
+      stationaryReleaseFixes: 0
+    }
+  }
+
+  const candidateSinceMs = looksStationary
+    ? (state.stationaryCandidateSinceMs ?? point.timestampMs)
+    : null
+  const stationaryConfirmed = candidateSinceMs !== null && point.timestampMs - candidateSinceMs >= STATIONARY_CONFIRM_MS
+
+  if (stationaryConfirmed) {
+    return {
+      ...base,
+      lastObservedPoint: point,
+      isStationary: true,
+      stationaryCandidateSinceMs: candidateSinceMs,
+      stationaryReleaseFixes: 0,
+      rejectedFixes: state.rejectedFixes + 1
+    }
+  }
+
+  const noiseGateM = Math.max(1.5, Math.min(previous.accuracyM, point.accuracyM) * 0.15)
   const deviceSaysStopped = point.speedMps !== null && point.speedMps < 0.5
   if (segmentM < noiseGateM || (deviceSaysStopped && segmentM < 5)) {
-    return { ...base, rejectedFixes: state.rejectedFixes + 1 }
+    return {
+      ...base,
+      lastObservedPoint: point,
+      stationaryCandidateSinceMs: candidateSinceMs,
+      rejectedFixes: state.rejectedFixes + 1
+    }
   }
 
   return {
     ...base,
     rawDistanceKm: state.rawDistanceKm + segmentM / 1000,
     lastAcceptedPoint: point,
+    lastObservedPoint: point,
     speedKph: point.speedMps === null ? impliedSpeedKph : point.speedMps * 3.6,
-    acceptedFixes: state.acceptedFixes + 1
+    acceptedFixes: state.acceptedFixes + 1,
+    isStationary: false,
+    stationaryCandidateSinceMs: candidateSinceMs,
+    stationaryReleaseFixes: 0
   }
 }
 

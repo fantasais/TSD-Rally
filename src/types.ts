@@ -1,6 +1,7 @@
 export type SegmentKind = 'speed' | 'zone'
 export type ZoneType = 'DZ' | 'FZ'
 export type ZoneBasis = 'speed' | 'time'
+export type SegmentSourceBasis = 'speed' | 'time'
 
 export type SpeedSector = {
   id: string
@@ -11,6 +12,10 @@ export type SpeedSector = {
   zoneType?: ZoneType
   zoneBasis?: ZoneBasis
   zoneDurationSeconds?: number
+  // Original chart representation. TIME sectors retain their prescribed segment time
+  // while speedKph stores the equivalent average used by the live rally display.
+  sourceBasis?: SegmentSourceBasis
+  sourceDurationSeconds?: number
 }
 
 export type RallySettings = {
@@ -24,6 +29,27 @@ export type RallyStatus = 'idle' | 'armed' | 'running' | 'stopped'
 
 export type TcCorrectionMethod = 'exact' | 'interpolated' | 'nearest'
 export type TcOdoCorrectionSource = 'gps-auto' | 'manual'
+
+export type RallyEventType =
+  | 'session-armed'
+  | 'session-started'
+  | 'session-ended'
+  | 'odo-adjusted'
+  | 'odo-set'
+  | 'tc-captured'
+  | 'tc-corrected'
+  | 'tc-restart'
+  | 'sftc-captured'
+  | 'gps-stationary-on'
+  | 'gps-stationary-off'
+
+export type RallyEventLog = {
+  id: string
+  atMs: number
+  type: RallyEventType
+  message: string
+  odoKm?: number | null
+}
 
 export type TcLog = {
   id: string
@@ -85,6 +111,7 @@ export type RallySession = {
   sftcLogs?: SftcLog[]
   pendingRestartTcId?: string | null
   pendingSftcId?: string | null
+  eventLogs?: RallyEventLog[]
 }
 
 export type GpsPoint = {
@@ -113,10 +140,14 @@ export type GpsState = {
   enabled: boolean
   rawDistanceKm: number
   lastAcceptedPoint: GpsPoint | null
+  lastObservedPoint: GpsPoint | null
   accuracyM: number | null
   speedKph: number | null
   lastFixMs: number | null
   acceptedFixes: number
   rejectedFixes: number
+  isStationary: boolean
+  stationaryCandidateSinceMs: number | null
+  stationaryReleaseFixes: number
   error: string | null
 }

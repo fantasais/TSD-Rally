@@ -12,11 +12,15 @@ const EMPTY_GPS: GpsState = {
   enabled: false,
   rawDistanceKm: 0,
   lastAcceptedPoint: null,
+  lastObservedPoint: null,
   accuracyM: null,
   speedKph: null,
   lastFixMs: null,
   acceptedFixes: 0,
   rejectedFixes: 0,
+  isStationary: false,
+  stationaryCandidateSinceMs: null,
+  stationaryReleaseFixes: 0,
   error: null
 }
 
@@ -39,7 +43,16 @@ function loadHistory(): GpsOdoSample[] {
 export function useGpsOdometer() {
   const initialGps = (() => {
     const saved = loadJson<GpsState>(STORAGE_KEY, EMPTY_GPS)
-    return { ...saved, enabled: false, error: null }
+    return {
+      ...EMPTY_GPS,
+      ...saved,
+      lastObservedPoint: saved.lastObservedPoint ?? saved.lastAcceptedPoint ?? null,
+      isStationary: saved.isStationary ?? false,
+      stationaryCandidateSinceMs: saved.stationaryCandidateSinceMs ?? null,
+      stationaryReleaseFixes: saved.stationaryReleaseFixes ?? 0,
+      enabled: false,
+      error: null
+    }
   })()
   const [gps, setGps] = useState<GpsState>(initialGps)
   const gpsRef = useRef<GpsState>(initialGps)

@@ -14,12 +14,20 @@ export function zoneBasis(segment: SpeedSector): 'speed' | 'time' {
   return segment.zoneBasis === 'time' ? 'time' : 'speed'
 }
 
+export function sourceBasis(segment: SpeedSector): 'speed' | 'time' {
+  return segment.sourceBasis === 'time' ? 'time' : 'speed'
+}
+
 export function segmentDurationSeconds(segment: SpeedSector): number {
   const distanceKm = Math.max(0, segment.toKm - segment.fromKm)
   if (distanceKm <= EPSILON) return 0
 
   if (segmentKind(segment) === 'zone' && zoneBasis(segment) === 'time') {
     return Math.max(0, segment.zoneDurationSeconds ?? 0)
+  }
+
+  if (segmentKind(segment) === 'speed' && sourceBasis(segment) === 'time') {
+    return Math.max(0, segment.sourceDurationSeconds ?? 0)
   }
 
   return segment.speedKph > 0 ? (distanceKm / segment.speedKph) * 3600 : 0
@@ -50,7 +58,12 @@ export function validateSectors(sectors: SpeedSector[]): string[] {
     if (segment.fromKm < 0) errors.push(`Entry ${index + 1}: start distance cannot be negative.`)
     if (segment.toKm <= segment.fromKm) errors.push(`Entry ${index + 1}: end distance must be greater than start distance.`)
 
-    if (kind === 'speed' || zoneBasis(segment) === 'speed') {
+    if (kind === 'speed' && sourceBasis(segment) === 'time') {
+      const duration = segment.sourceDurationSeconds ?? 0
+      if (!Number.isFinite(duration) || duration <= 0) {
+        errors.push(`Entry ${index + 1} (time sector): segment time must be greater than zero.`)
+      }
+    } else if (kind === 'speed' || zoneBasis(segment) === 'speed') {
       if (!Number.isFinite(segment.speedKph) || segment.speedKph <= 0) {
         errors.push(`Entry ${index + 1} (${label}): speed must be greater than zero.`)
       }
@@ -76,6 +89,39 @@ export function validateSectors(sectors: SpeedSector[]): string[] {
   return errors
 }
 
+export function validateSectorWarnings(sectors: SpeedSector[]): string[] {
+  const warnings: string[] = []
+  const sorted = sortSectors(sectors)
+
+  sorted.forEach((segment, index) => {
+    if (!Number.isFinite(segment.fromKm) || !Number.isFinite(segment.toKm) || segment.toKm <= segment.fromKm) return
+
+    const distanceKm = segment.toKm - segment.fromKm
+    const durationSeconds = segmentDurationSeconds(segment)
+    const effectiveKph = effectiveSpeedKph(segment)
+    const kind = segmentKind(segment)
+    const isPrescribedTime = (kind === 'speed' && sourceBasis(segment) === 'time') || (kind === 'zone' && zoneBasis(segment) === 'time')
+
+    if (Number.isFinite(effectiveKph) && effectiveKph > 160) {
+      warnings.push(`Entry ${index + 1}: derived target ${effectiveKph.toFixed(1)} km/h is unusually high. Check the chart.`)
+    }
+
+    if (Number.isFinite(effectiveKph) && effectiveKph > 0 && effectiveKph < 2 && distanceKm >= 0.05) {
+      warnings.push(`Entry ${index + 1}: derived target ${effectiveKph.toFixed(1)} km/h is unusually low. Check the chart.`)
+    }
+
+    if (isPrescribedTime && durationSeconds >= 15 * 60) {
+      warnings.push(`Entry ${index + 1}: prescribed time ${formatDuration(durationSeconds)} is unusually long. Confirm against the organiser chart.`)
+    }
+
+    if (isPrescribedTime && durationSeconds > 0 && durationSeconds <= 2 && distanceKm >= 0.01) {
+      warnings.push(`Entry ${index + 1}: prescribed time ${formatDuration(durationSeconds)} is unusually short. Confirm against the organiser chart.`)
+    }
+  })
+
+  return warnings
+}
+
 export function totalRouteKm(sectors: SpeedSector[]): number {
   const sorted = sortSectors(sectors)
   return sorted.length ? sorted[sorted.length - 1].toKm : 0
@@ -99,11 +145,9 @@ export function idealElapsedSecondsAtDistance(distanceKm: number, sectors: Speed
     const coveredKm = Math.max(0, segmentEnd - segment.fromKm)
     const fullKm = Math.max(EPSILON, segment.toKm - segment.fromKm)
 
-    if (segmentKind(segment) === 'zone' && zoneBasis(segment) === 'time') {
-      const fullDuration = Math.max(0, segment.zoneDurationSeconds ?? 0)
+    const fullDuration = segmentDurationSeconds(segment)
+    if (fullDuration > 0) {
       seconds += fullDuration * (coveredKm / fullKm)
-    } else if (segment.speedKph > 0) {
-      seconds += (coveredKm / segment.speedKph) * 3600
     }
 
     if (distance <= segment.toKm + EPSILON) break
